@@ -8,6 +8,7 @@ function registerIpcHandlers({
   resetCodexHome,
   updateDatabasePath,
   resetDatabasePath,
+  runIntegrityCheck,
   listProjects,
   listThreads,
   listTurns,
@@ -39,6 +40,10 @@ function registerIpcHandlers({
 
   ipcMain.handle("app:reset-database-path", () => {
     return resetDatabasePath();
+  });
+
+  ipcMain.handle("library:run-integrity-check", () => {
+    return runIntegrityCheck();
   });
 
   ipcMain.handle("library:list-projects", () => {

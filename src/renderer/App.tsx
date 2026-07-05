@@ -524,10 +524,13 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
   const [turns, setTurns] = useState<TurnListItem[]>([]);
   const [turnItems, setTurnItems] = useState<TurnItem[]>([]);
+  const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [isTurnModalOpen, setIsTurnModalOpen] = useState(false);
+  const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isIntegrityChecking, setIsIntegrityChecking] = useState(false);
   const [isLibraryLoading, setIsLibraryLoading] = useState(true);
   const [isPathPanelOpen, setIsPathPanelOpen] = useState(false);
   const [codexHomeDraft, setCodexHomeDraft] = useState("");
@@ -559,6 +562,10 @@ export default function App() {
   const questionTurns = turns;
   const primaryTurnItems = turnItems.filter((item) => isPrimaryDetailItem(item));
   const additionalTurnItems = turnItems.filter((item) => !isPrimaryDetailItem(item));
+  const integrityFailedChecks =
+    integrityReport?.checks.filter((check) => check.status === "fail") ?? [];
+  const integrityPassedChecks =
+    integrityReport?.checks.filter((check) => check.status === "pass") ?? [];
   const sidebarProjects = projects.filter((project) => project.isSidebarProject);
   const historicalProjects = projects.filter((project) => !project.isSidebarProject);
   const allProjectIds = new Set(projects.map((project) => project.id));
@@ -711,13 +718,14 @@ export default function App() {
   }, [expandedProjectIds]);
 
   useEffect(() => {
-    if (!isTurnModalOpen) {
+    if (!isTurnModalOpen && !isIntegrityModalOpen) {
       return;
     }
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsTurnModalOpen(false);
+        setIsIntegrityModalOpen(false);
       }
     }
 
@@ -725,7 +733,7 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isTurnModalOpen]);
+  }, [isTurnModalOpen, isIntegrityModalOpen]);
 
   useEffect(() => {
     setIsAdditionalItemsVisible(false);
@@ -790,6 +798,10 @@ export default function App() {
     setIsTurnModalOpen(false);
   }
 
+  function handleCloseIntegrityModal() {
+    setIsIntegrityModalOpen(false);
+  }
+
   function handleDetailItemToggle(itemId: string) {
     setExpandedDetailItemIds((current) => ({
       ...current,
@@ -804,6 +816,21 @@ export default function App() {
       await window.codexCardFeed.openCodexThread(threadId);
     } catch (error) {
       setLoadError(getErrorMessage(error));
+    }
+  }
+
+  async function handleRunIntegrityCheck() {
+    setIsIntegrityChecking(true);
+    setLoadError(null);
+
+    try {
+      const nextReport = await window.codexCardFeed.runIntegrityCheck();
+      setIntegrityReport(nextReport);
+      setIsIntegrityModalOpen(true);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsIntegrityChecking(false);
     }
   }
 
@@ -1241,13 +1268,34 @@ export default function App() {
                 Questions
               </button>
             </div>
-            <p className="panel-toolbar-meta muted">
-              {selectedThread
-                ? rightPanelMode === "turns"
-                  ? formatCountLabel(turns.length, "turn")
-                  : formatCountLabel(questionTurns.length, "question")
-                : "No thread selected"}
-            </p>
+            <div className="panel-toolbar-actions">
+              <p className="panel-toolbar-meta muted">
+                {selectedThread
+                  ? rightPanelMode === "turns"
+                    ? formatCountLabel(turns.length, "turn")
+                    : formatCountLabel(questionTurns.length, "question")
+                  : "No thread selected"}
+              </p>
+              {integrityReport ? (
+                <p
+                  className={`mini-meta integrity-toolbar-meta ${
+                    integrityReport.summary.failedChecks ? "has-issues" : "is-clean"
+                  }`}
+                >
+                  {integrityReport.summary.failedChecks
+                    ? `${formatCountLabel(integrityReport.summary.failedChecks, "issue")} found`
+                    : "No issues found"}
+                </p>
+              ) : null}
+              <button
+                className="secondary-button"
+                disabled={isIntegrityChecking}
+                onClick={() => void handleRunIntegrityCheck()}
+                type="button"
+              >
+                {isIntegrityChecking ? "Checking..." : "Data check"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1337,6 +1385,142 @@ export default function App() {
           )}
         </section>
       </section>
+
+      {isIntegrityModalOpen && integrityReport ? (
+        <div
+          className="modal-overlay"
+          onClick={handleCloseIntegrityModal}
+          role="presentation"
+        >
+          <section
+            className="card modal-dialog integrity-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="workspace-kicker">Data integrity</p>
+                <h2>Database integrity check</h2>
+                <p className="muted">
+                  Last checked {formatDateTime(integrityReport.checkedAt)}
+                </p>
+              </div>
+              <div className="modal-header-actions">
+                <button
+                  className="secondary-button"
+                  disabled={isIntegrityChecking}
+                  onClick={() => void handleRunIntegrityCheck()}
+                  type="button"
+                >
+                  {isIntegrityChecking ? "Checking..." : "Run again"}
+                </button>
+                <button
+                  className="modal-close"
+                  onClick={handleCloseIntegrityModal}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-scroll">
+              <div className="detail-body">
+                <section className="integrity-summary-panel">
+                  <dl className="integrity-summary-grid">
+                    <div>
+                      <dt>Total checks</dt>
+                      <dd>{formatInteger(integrityReport.summary.totalChecks)}</dd>
+                    </div>
+                    <div>
+                      <dt>Passed</dt>
+                      <dd>{formatInteger(integrityReport.summary.passedChecks)}</dd>
+                    </div>
+                    <div>
+                      <dt>Failed</dt>
+                      <dd>{formatInteger(integrityReport.summary.failedChecks)}</dd>
+                    </div>
+                    <div>
+                      <dt>Errors</dt>
+                      <dd>{formatInteger(integrityReport.summary.errorCount)}</dd>
+                    </div>
+                    <div>
+                      <dt>Warnings</dt>
+                      <dd>{formatInteger(integrityReport.summary.warningCount)}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="integrity-section">
+                  <div className="integrity-section-header">
+                    <strong>Issues</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(integrityFailedChecks.length, "check")}
+                    </span>
+                  </div>
+
+                  {integrityFailedChecks.length ? (
+                    <div className="integrity-check-list">
+                      {integrityFailedChecks.map((check) => (
+                        <article className="integrity-check-card" key={check.key}>
+                          <div className="integrity-check-header">
+                            <div>
+                              <strong>{check.label}</strong>
+                              <p className="integrity-check-description">
+                                {check.description}
+                              </p>
+                            </div>
+                            <div className="integrity-check-pills">
+                              <span
+                                className={`integrity-severity-pill ${
+                                  check.severity === "error" ? "is-error" : "is-warning"
+                                }`}
+                              >
+                                {check.severity}
+                              </span>
+                              <span className="count-pill">
+                                {formatInteger(check.affectedCount)}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="integrity-check-message">{check.message}</p>
+                          {check.sampleRefs.length ? (
+                            <ul className="integrity-sample-list">
+                              {check.sampleRefs.map((sampleRef) => (
+                                <li key={`${check.key}:${sampleRef}`}>{sampleRef}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No integrity issues were detected.
+                    </p>
+                  )}
+                </section>
+
+                <section className="integrity-section">
+                  <div className="integrity-section-header">
+                    <strong>Passed checks</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(integrityPassedChecks.length, "check")}
+                    </span>
+                  </div>
+                  <div className="integrity-pass-list">
+                    {integrityPassedChecks.map((check) => (
+                      <article className="integrity-pass-row" key={check.key}>
+                        <strong>{check.label}</strong>
+                        <p className="mini-meta">{check.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isTurnModalOpen && selectedTurn ? (
         <div className="modal-overlay" onClick={handleCloseTurnModal} role="presentation">

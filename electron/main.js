@@ -9,6 +9,7 @@ const {
   listTurnsByThread,
   listItemsByTurn
 } = require("./db");
+const { runIntegrityCheck } = require("./integrity");
 const {
   getDefaultCodexHome,
   importCodexSessions,
@@ -193,6 +194,9 @@ app.whenReady().then(() => {
     },
     resetDatabasePath() {
       return reopenDatabaseAtPath(pathSettings.defaultDatabasePath);
+    },
+    runIntegrityCheck() {
+      return runIntegrityCheck(databaseState.database);
     },
     listProjects() {
       const sidebarWorkspaceRoots = new Set(

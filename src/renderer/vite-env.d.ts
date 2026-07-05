@@ -143,6 +143,29 @@ type TurnItem = {
   createdAt: string | null;
 };
 
+type IntegrityCheckResult = {
+  key: string;
+  label: string;
+  description: string;
+  severity: "error" | "warning";
+  status: "pass" | "fail";
+  affectedCount: number;
+  sampleRefs: string[];
+  message: string;
+};
+
+type IntegrityReport = {
+  checkedAt: string;
+  summary: {
+    totalChecks: number;
+    passedChecks: number;
+    failedChecks: number;
+    errorCount: number;
+    warningCount: number;
+  };
+  checks: IntegrityCheckResult[];
+};
+
 interface Window {
   codexCardFeed: {
     getShellInfo(): Promise<ShellInfo>;
@@ -152,6 +175,7 @@ interface Window {
     resetCodexHome(): Promise<ShellInfo>;
     updateDatabasePath(databasePath: string): Promise<ShellInfo>;
     resetDatabasePath(): Promise<ShellInfo>;
+    runIntegrityCheck(): Promise<IntegrityReport>;
     listProjects(): Promise<ProjectListItem[]>;
     listThreads(projectId?: string | null): Promise<ThreadListItem[]>;
     listTurns(threadId: string): Promise<TurnListItem[]>;
