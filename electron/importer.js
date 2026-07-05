@@ -10,6 +10,172 @@ const GLOBAL_STATE_SIGNATURE_KEY = "codex_card_feed_global_state_signature";
 const SOURCE_FILE_STATUS_ACTIVE = "active";
 const SOURCE_FILE_STATUS_MISSING = "missing";
 const SOURCE_FILE_STATUS_ERROR = "error";
+const KNOWN_TOP_LEVEL_ENTRY_TYPES = new Set([
+  "session_meta",
+  "turn_context",
+  "event_msg",
+  "response_item",
+  "compacted"
+]);
+const KNOWN_EVENT_MSG_TYPES = new Set([
+  "agent_message",
+  "context_compacted",
+  "dynamic_tool_call_request",
+  "dynamic_tool_call_response",
+  "error",
+  "exec_command_end",
+  "image_generation_end",
+  "item_completed",
+  "mcp_tool_call_end",
+  "patch_apply_end",
+  "task_complete",
+  "task_started",
+  "thread_name_updated",
+  "thread_rolled_back",
+  "token_count",
+  "turn_aborted",
+  "user_message",
+  "view_image_tool_call",
+  "web_search_end"
+]);
+const KNOWN_RESPONSE_ITEM_TYPES = new Set([
+  "custom_tool_call",
+  "custom_tool_call_output",
+  "function_call",
+  "function_call_output",
+  "image_generation_call",
+  "message",
+  "reasoning",
+  "tool_search_call",
+  "tool_search_output",
+  "web_search_call"
+]);
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function incrementTypeCount(bucket, key) {
+  bucket.set(key, (bucket.get(key) ?? 0) + 1);
+}
+
+function createValidationState() {
+  return {
+    warnings: [],
+    errors: [],
+    issueKeys: new Set(),
+    observedTypes: {
+      topLevel: new Map(),
+      eventMsg: new Map(),
+      responseItem: new Map()
+    },
+    stats: {
+      sessionIndexLineCount: 0,
+      validSessionIndexEntryCount: 0,
+      invalidSessionIndexLineCount: 0,
+      globalStateReadCount: 0
+    }
+  };
+}
+
+function addValidationIssue(validationState, severity, issue) {
+  if (!validationState) {
+    return;
+  }
+
+  const issueKey =
+    issue.dedupeKey ??
+    [
+      severity,
+      issue.scope ?? "",
+      issue.filePath ?? "",
+      issue.code ?? "",
+      issue.lineNumber ?? "",
+      issue.field ?? "",
+      issue.typeName ?? ""
+    ].join("|");
+
+  if (validationState.issueKeys.has(issueKey)) {
+    return;
+  }
+
+  validationState.issueKeys.add(issueKey);
+
+  const entry = {
+    scope: issue.scope ?? "import",
+    filePath: issue.filePath ?? null,
+    code: issue.code ?? "unknown_validation_issue",
+    message: issue.message ?? "",
+    lineNumber: issue.lineNumber ?? null
+  };
+
+  if (severity === "error") {
+    validationState.errors.push(entry);
+    return;
+  }
+
+  validationState.warnings.push(entry);
+}
+
+function addValidationWarning(validationState, issue) {
+  addValidationIssue(validationState, "warning", issue);
+}
+
+function addValidationError(validationState, issue) {
+  addValidationIssue(validationState, "error", issue);
+}
+
+function toTypeCountRows(typeMap) {
+  return [...typeMap.entries()]
+    .sort((left, right) => {
+      if (left[1] !== right[1]) {
+        return right[1] - left[1];
+      }
+
+      return left[0].localeCompare(right[0]);
+    })
+    .map(([type, count]) => ({
+      type,
+      count
+    }));
+}
+
+function buildValidationSummary(validationState) {
+  return {
+    warningCount: validationState.warnings.length,
+    errorCount: validationState.errors.length,
+    sessionIndex: {
+      lineCount: validationState.stats.sessionIndexLineCount,
+      validEntryCount: validationState.stats.validSessionIndexEntryCount,
+      invalidLineCount: validationState.stats.invalidSessionIndexLineCount
+    },
+    globalState: {
+      readCount: validationState.stats.globalStateReadCount
+    },
+    observedTypes: {
+      topLevel: toTypeCountRows(validationState.observedTypes.topLevel),
+      eventMsg: toTypeCountRows(validationState.observedTypes.eventMsg),
+      responseItem: toTypeCountRows(validationState.observedTypes.responseItem)
+    }
+  };
+}
+
+function listValidationLogEntries(validationState) {
+  return [
+    ...validationState.warnings.map((entry) => ({
+      ...entry,
+      severity: "warning"
+    })),
+    ...validationState.errors.map((entry) => ({
+      ...entry,
+      severity: "error"
+    }))
+  ];
+}
 
 function getDefaultCodexHome() {
   return path.join(os.homedir(), ".codex");
@@ -75,7 +241,7 @@ function discoverSessionFiles(directoryPath) {
   return files.sort();
 }
 
-function loadSessionIndex(codexHome) {
+function loadSessionIndex(codexHome, validationState = null) {
   const indexPath = getSessionIndexPath(codexHome);
   const sessionIndex = new Map();
 
@@ -85,26 +251,196 @@ function loadSessionIndex(codexHome) {
 
   const lines = fs.readFileSync(indexPath, "utf8").split(/\r?\n/);
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     if (!line.trim()) {
       continue;
     }
 
+    if (validationState) {
+      validationState.stats.sessionIndexLineCount += 1;
+    }
+
+    let parsed;
+
     try {
-      const parsed = JSON.parse(line);
-      sessionIndex.set(parsed.id, {
-        title: parsed.thread_name ?? "",
-        updatedAt: parsed.updated_at ?? null
-      });
+      parsed = JSON.parse(line);
     } catch {
+      if (validationState) {
+        validationState.stats.invalidSessionIndexLineCount += 1;
+      }
+      addValidationWarning(validationState, {
+        scope: "session_index",
+        filePath: indexPath,
+        lineNumber: index + 1,
+        code: "session_index_invalid_json_line",
+        message: "Skipping invalid JSON line in session_index.jsonl."
+      });
       continue;
+    }
+
+    if (!isRecord(parsed)) {
+      if (validationState) {
+        validationState.stats.invalidSessionIndexLineCount += 1;
+      }
+      addValidationWarning(validationState, {
+        scope: "session_index",
+        filePath: indexPath,
+        lineNumber: index + 1,
+        code: "session_index_invalid_entry_shape",
+        message: "Skipping non-object entry in session_index.jsonl."
+      });
+      continue;
+    }
+
+    if (!isNonEmptyString(parsed.id)) {
+      if (validationState) {
+        validationState.stats.invalidSessionIndexLineCount += 1;
+      }
+      addValidationWarning(validationState, {
+        scope: "session_index",
+        filePath: indexPath,
+        lineNumber: index + 1,
+        code: "session_index_missing_id",
+        message: "Skipping session index entry without a valid id."
+      });
+      continue;
+    }
+
+    if (parsed.thread_name !== undefined && typeof parsed.thread_name !== "string") {
+      addValidationWarning(validationState, {
+        scope: "session_index",
+        filePath: indexPath,
+        lineNumber: index + 1,
+        code: "session_index_invalid_thread_name",
+        message: "Session index thread_name is not a string; using an empty title."
+      });
+    }
+
+    if (parsed.updated_at !== undefined && typeof parsed.updated_at !== "string") {
+      addValidationWarning(validationState, {
+        scope: "session_index",
+        filePath: indexPath,
+        lineNumber: index + 1,
+        code: "session_index_invalid_updated_at",
+        message: "Session index updated_at is not a string; using null."
+      });
+    }
+
+    sessionIndex.set(parsed.id, {
+      title: typeof parsed.thread_name === "string" ? parsed.thread_name : "",
+      updatedAt: typeof parsed.updated_at === "string" ? parsed.updated_at : null
+    });
+
+    if (validationState) {
+      validationState.stats.validSessionIndexEntryCount += 1;
     }
   }
 
   return sessionIndex;
 }
 
-function loadCodexStateIndex(codexHome) {
+function readValidatedStateValue(parsedState, persistedState, key) {
+  return parsedState[key] ?? persistedState[key] ?? null;
+}
+
+function readValidatedStringArrayValue(
+  readStateValue,
+  key,
+  filePath,
+  validationState,
+  options = {}
+) {
+  const value = readStateValue(key);
+
+  if (value === null || value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    const message = `${key} must be an array when present in the Codex global state.`;
+    addValidationError(validationState, {
+      scope: "global_state",
+      filePath,
+      code: "global_state_invalid_array_field",
+      field: key,
+      message
+    });
+
+    if (options.strict) {
+      throw new Error(message);
+    }
+
+    return [];
+  }
+
+  return value.filter((entry, index) => {
+    if (typeof entry === "string" && entry) {
+      return true;
+    }
+
+    addValidationWarning(validationState, {
+      scope: "global_state",
+      filePath,
+      code: "global_state_invalid_array_entry",
+      field: key,
+      lineNumber: index + 1,
+      message: `${key} contains a non-string entry; it will be ignored.`
+    });
+    return false;
+  });
+}
+
+function readValidatedStringMapValue(
+  readStateValue,
+  key,
+  filePath,
+  validationState,
+  options = {}
+) {
+  const value = readStateValue(key);
+
+  if (value === null || value === undefined) {
+    return {};
+  }
+
+  if (!isRecord(value)) {
+    const message = `${key} must be an object when present in the Codex global state.`;
+    addValidationError(validationState, {
+      scope: "global_state",
+      filePath,
+      code: "global_state_invalid_object_field",
+      field: key,
+      message
+    });
+
+    if (options.strict) {
+      throw new Error(message);
+    }
+
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([entryKey, entryValue]) => {
+      if (typeof entryKey === "string" && entryKey && typeof entryValue === "string" && entryValue) {
+        return [[entryKey, entryValue]];
+      }
+
+      addValidationWarning(validationState, {
+        scope: "global_state",
+        filePath,
+        code: "global_state_invalid_object_entry",
+        field: key,
+        message: `${key} contains a non-string key/value pair; it will be ignored.`
+      });
+      return [];
+    })
+  );
+}
+
+function loadCodexStateIndex(codexHome, options = {}) {
+  const validationState = options.validationState ?? null;
+  const strict = options.strict ?? false;
   const globalStatePath = getGlobalStatePath(codexHome);
   const stateIndex = {
     projectlessThreadIds: new Set(),
@@ -119,105 +455,140 @@ function loadCodexStateIndex(codexHome) {
     return stateIndex;
   }
 
+  if (validationState) {
+    validationState.stats.globalStateReadCount += 1;
+  }
+
+  let parsedState;
+
   try {
-    const rawState = fs.readFileSync(globalStatePath, "utf8");
-    const parsedState = JSON.parse(rawState);
-    const persistedState = parsedState["electron-persisted-atom-state"] ?? {};
-    const readStateValue = (key) =>
-      parsedState[key] ?? persistedState[key] ?? null;
-
-    const savedWorkspaceRoots = [
-      ...(Array.isArray(readStateValue("electron-saved-workspace-roots"))
-        ? readStateValue("electron-saved-workspace-roots")
-        : []),
-      ...(Array.isArray(readStateValue("project-order"))
-        ? readStateValue("project-order")
-        : [])
-    ];
-
-    for (const workspaceRoot of savedWorkspaceRoots) {
-      if (typeof workspaceRoot === "string" && workspaceRoot) {
-        stateIndex.savedWorkspaceRoots.add(normalizePathForId(workspaceRoot));
-      }
-    }
-
-    if (
-      readStateValue("electron-workspace-root-labels") &&
-      typeof readStateValue("electron-workspace-root-labels") === "object"
-    ) {
-      for (const [workspaceRoot, displayName] of Object.entries(
-        readStateValue("electron-workspace-root-labels")
-      )) {
-        if (
-          typeof workspaceRoot === "string" &&
-          workspaceRoot &&
-          typeof displayName === "string" &&
-          displayName.trim()
-        ) {
-          stateIndex.workspaceRootLabels.set(
-            normalizePathForId(workspaceRoot),
-            displayName.trim()
-          );
-        }
-      }
-    }
-
-    if (Array.isArray(readStateValue("projectless-thread-ids"))) {
-      for (const threadId of readStateValue("projectless-thread-ids")) {
-        if (typeof threadId === "string" && threadId) {
-          stateIndex.projectlessThreadIds.add(threadId);
-        }
-      }
-    }
-
-    if (
-      readStateValue("thread-projectless-output-directories") &&
-      typeof readStateValue("thread-projectless-output-directories") === "object"
-    ) {
-      for (const [threadId, outputDirectory] of Object.entries(
-        readStateValue("thread-projectless-output-directories")
-      )) {
-        if (
-          typeof threadId === "string" &&
-          threadId &&
-          typeof outputDirectory === "string" &&
-          outputDirectory
-        ) {
-          stateIndex.projectlessOutputDirectoryByThreadId.set(threadId, outputDirectory);
-        }
-      }
-    }
-
-    if (
-      readStateValue("thread-workspace-root-hints") &&
-      typeof readStateValue("thread-workspace-root-hints") === "object"
-    ) {
-      for (const [threadId, workspaceRoot] of Object.entries(
-        readStateValue("thread-workspace-root-hints")
-      )) {
-        if (
-          typeof threadId === "string" &&
-          threadId &&
-          typeof workspaceRoot === "string" &&
-          workspaceRoot
-        ) {
-          stateIndex.threadWorkspaceRootHints.set(threadId, workspaceRoot);
-        }
-      }
-    }
-
-    for (const threadId of [
-      ...stateIndex.projectlessThreadIds,
-      ...stateIndex.projectlessOutputDirectoryByThreadId.keys()
-    ]) {
-      const workspaceRoot = stateIndex.threadWorkspaceRootHints.get(threadId);
-
-      if (workspaceRoot) {
-        stateIndex.projectlessWorkspaceRoots.add(normalizePathForId(workspaceRoot));
-      }
-    }
+    parsedState = JSON.parse(fs.readFileSync(globalStatePath, "utf8"));
   } catch {
+    const message = "Codex global state file could not be parsed as JSON.";
+    addValidationError(validationState, {
+      scope: "global_state",
+      filePath: globalStatePath,
+      code: "global_state_invalid_json",
+      message
+    });
+
+    if (strict) {
+      throw new Error(message);
+    }
+
     return stateIndex;
+  }
+
+  if (!isRecord(parsedState)) {
+    const message = "Codex global state root must be an object.";
+    addValidationError(validationState, {
+      scope: "global_state",
+      filePath: globalStatePath,
+      code: "global_state_invalid_root",
+      message
+    });
+
+    if (strict) {
+      throw new Error(message);
+    }
+
+    return stateIndex;
+  }
+
+  const persistedStateRaw = parsedState["electron-persisted-atom-state"];
+
+  if (persistedStateRaw !== undefined && persistedStateRaw !== null && !isRecord(persistedStateRaw)) {
+    const message = "electron-persisted-atom-state must be an object when present.";
+    addValidationError(validationState, {
+      scope: "global_state",
+      filePath: globalStatePath,
+      code: "global_state_invalid_persisted_state",
+      message
+    });
+
+    if (strict) {
+      throw new Error(message);
+    }
+  }
+
+  const persistedState = isRecord(persistedStateRaw) ? persistedStateRaw : {};
+  const readStateValue = (key) => readValidatedStateValue(parsedState, persistedState, key);
+  const savedWorkspaceRoots = [
+    ...readValidatedStringArrayValue(
+      readStateValue,
+      "electron-saved-workspace-roots",
+      globalStatePath,
+      validationState,
+      { strict }
+    ),
+    ...readValidatedStringArrayValue(
+      readStateValue,
+      "project-order",
+      globalStatePath,
+      validationState,
+      { strict }
+    )
+  ];
+
+  for (const workspaceRoot of savedWorkspaceRoots) {
+    stateIndex.savedWorkspaceRoots.add(normalizePathForId(workspaceRoot));
+  }
+
+  const workspaceRootLabels = readValidatedStringMapValue(
+    readStateValue,
+    "electron-workspace-root-labels",
+    globalStatePath,
+    validationState,
+    { strict }
+  );
+
+  for (const [workspaceRoot, displayName] of Object.entries(workspaceRootLabels)) {
+    stateIndex.workspaceRootLabels.set(normalizePathForId(workspaceRoot), displayName.trim());
+  }
+
+  for (const threadId of readValidatedStringArrayValue(
+    readStateValue,
+    "projectless-thread-ids",
+    globalStatePath,
+    validationState,
+    { strict }
+  )) {
+    stateIndex.projectlessThreadIds.add(threadId);
+  }
+
+  for (const [threadId, outputDirectory] of Object.entries(
+    readValidatedStringMapValue(
+      readStateValue,
+      "thread-projectless-output-directories",
+      globalStatePath,
+      validationState,
+      { strict }
+    )
+  )) {
+    stateIndex.projectlessOutputDirectoryByThreadId.set(threadId, outputDirectory);
+  }
+
+  for (const [threadId, workspaceRoot] of Object.entries(
+    readValidatedStringMapValue(
+      readStateValue,
+      "thread-workspace-root-hints",
+      globalStatePath,
+      validationState,
+      { strict }
+    )
+  )) {
+    stateIndex.threadWorkspaceRootHints.set(threadId, workspaceRoot);
+  }
+
+  for (const threadId of [
+    ...stateIndex.projectlessThreadIds,
+    ...stateIndex.projectlessOutputDirectoryByThreadId.keys()
+  ]) {
+    const workspaceRoot = stateIndex.threadWorkspaceRootHints.get(threadId);
+
+    if (workspaceRoot) {
+      stateIndex.projectlessWorkspaceRoots.add(normalizePathForId(workspaceRoot));
+    }
   }
 
   return stateIndex;
@@ -614,7 +985,14 @@ function resolveResponseItemTurnId(payload, activeTurnId) {
   return activeTurnId ?? null;
 }
 
-function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fileSnapshot = null) {
+function parseSessionFile(
+  filePath,
+  sessionIndex,
+  codexHome,
+  codexStateIndex,
+  fileSnapshot = null,
+  validationState = null
+) {
   const sourceFileSnapshot = fileSnapshot ?? createSourceFileSnapshot(filePath);
   const fileContent = fs.readFileSync(filePath, "utf8");
   const lines = fileContent.split(/\r?\n/).filter((line) => line.trim());
@@ -628,6 +1006,34 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
   const turnOrder = [];
   let fallbackPreview = "";
   let activeTurnId = null;
+
+  function failValidation(code, message, lineNumber = null) {
+    addValidationError(validationState, {
+      scope: "session_file",
+      filePath,
+      lineNumber,
+      code,
+      message
+    });
+
+    return {
+      ok: false,
+      code,
+      reason: message,
+      filePath
+    };
+  }
+
+  function warnValidation(code, message, lineNumber = null, typeName = null) {
+    addValidationWarning(validationState, {
+      scope: "session_file",
+      filePath,
+      lineNumber,
+      code,
+      typeName,
+      message
+    });
+  }
 
   function ensureTurn(turnId) {
     if (!turns.has(turnId)) {
@@ -659,18 +1065,89 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
     }
   }
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    const lineNumber = index + 1;
     let parsed;
 
     try {
       parsed = JSON.parse(line);
     } catch {
+      return failValidation(
+        "session_file_invalid_json_line",
+        "Session file contains an invalid JSON line.",
+        lineNumber
+      );
+    }
+
+    if (!isRecord(parsed)) {
+      return failValidation(
+        "session_file_invalid_entry_shape",
+        "Session file entry must be an object.",
+        lineNumber
+      );
+    }
+
+    if (!isNonEmptyString(parsed.type)) {
+      return failValidation(
+        "session_file_missing_entry_type",
+        "Session file entry is missing a valid type.",
+        lineNumber
+      );
+    }
+
+    incrementTypeCount(validationState.observedTypes.topLevel, parsed.type);
+
+    if (!KNOWN_TOP_LEVEL_ENTRY_TYPES.has(parsed.type)) {
+      warnValidation(
+        "session_file_unknown_top_level_type",
+        `Encountered unknown top-level session entry type "${parsed.type}".`,
+        lineNumber,
+        parsed.type
+      );
       continue;
     }
 
     if (parsed.type === "session_meta") {
-      sessionId = parsed.payload.session_id ?? parsed.payload.id ?? sessionId;
-      threadCwd = parsed.payload.cwd ?? threadCwd;
+      if (!isRecord(parsed.payload)) {
+        return failValidation(
+          "session_meta_invalid_payload",
+          "session_meta payload must be an object.",
+          lineNumber
+        );
+      }
+
+      const resolvedSessionId = parsed.payload.session_id ?? parsed.payload.id ?? null;
+
+      if (!isNonEmptyString(resolvedSessionId)) {
+        return failValidation(
+          "session_meta_missing_session_id",
+          "session_meta must include payload.session_id or payload.id as a string.",
+          lineNumber
+        );
+      }
+
+      if (parsed.payload.cwd !== undefined && parsed.payload.cwd !== null && typeof parsed.payload.cwd !== "string") {
+        warnValidation(
+          "session_meta_invalid_cwd",
+          "session_meta payload.cwd is not a string; ignoring it.",
+          lineNumber
+        );
+      }
+
+      if (
+        parsed.payload.workspace_roots !== undefined &&
+        parsed.payload.workspace_roots !== null &&
+        !Array.isArray(parsed.payload.workspace_roots)
+      ) {
+        warnValidation(
+          "session_meta_invalid_workspace_roots",
+          "session_meta payload.workspace_roots is not an array; ignoring it.",
+          lineNumber
+        );
+      }
+
+      sessionId = resolvedSessionId;
+      threadCwd = typeof parsed.payload.cwd === "string" ? parsed.payload.cwd : threadCwd;
       threadCreatedAt = parsed.payload.timestamp ?? parsed.timestamp ?? threadCreatedAt;
       if (!threadWorkspaceRoots.length) {
         threadWorkspaceRoots = normalizePathList(parsed.payload.workspace_roots);
@@ -679,6 +1156,34 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
     }
 
     if (parsed.type === "turn_context") {
+      if (!isRecord(parsed.payload)) {
+        return failValidation(
+          "turn_context_invalid_payload",
+          "turn_context payload must be an object.",
+          lineNumber
+        );
+      }
+
+      if (!isNonEmptyString(parsed.payload.turn_id)) {
+        return failValidation(
+          "turn_context_missing_turn_id",
+          "turn_context must include payload.turn_id as a string.",
+          lineNumber
+        );
+      }
+
+      if (
+        parsed.payload.workspace_roots !== undefined &&
+        parsed.payload.workspace_roots !== null &&
+        !Array.isArray(parsed.payload.workspace_roots)
+      ) {
+        warnValidation(
+          "turn_context_invalid_workspace_roots",
+          "turn_context payload.workspace_roots is not an array; ignoring it.",
+          lineNumber
+        );
+      }
+
       const turn = ensureTurn(parsed.payload.turn_id);
       turn.startedAt = pickEarlierIso(turn.startedAt, parsed.timestamp);
       if (!threadWorkspaceRoots.length) {
@@ -688,9 +1193,52 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
     }
 
     if (parsed.type === "event_msg") {
-      const payload = parsed.payload ?? {};
+      if (!isRecord(parsed.payload)) {
+        return failValidation(
+          "event_msg_invalid_payload",
+          "event_msg payload must be an object.",
+          lineNumber
+        );
+      }
 
-      if (payload.type === "user_message" && typeof payload.message === "string") {
+      const payload = parsed.payload;
+
+      if (!isNonEmptyString(payload.type)) {
+        return failValidation(
+          "event_msg_missing_type",
+          "event_msg must include payload.type as a string.",
+          lineNumber
+        );
+      }
+
+      incrementTypeCount(validationState.observedTypes.eventMsg, payload.type);
+
+      if (!KNOWN_EVENT_MSG_TYPES.has(payload.type)) {
+        warnValidation(
+          "event_msg_unknown_type",
+          `Encountered unknown event_msg payload.type "${payload.type}".`,
+          lineNumber,
+          payload.type
+        );
+      }
+
+      if (payload.turn_id !== undefined && payload.turn_id !== null && !isNonEmptyString(payload.turn_id)) {
+        return failValidation(
+          "event_msg_invalid_turn_id",
+          "event_msg payload.turn_id must be a string when present.",
+          lineNumber
+        );
+      }
+
+      if (payload.type === "user_message") {
+        if (typeof payload.message !== "string") {
+          return failValidation(
+            "event_msg_invalid_user_message",
+            "event_msg user_message must include payload.message as a string.",
+            lineNumber
+          );
+        }
+
         const turnId = payload.turn_id ?? activeTurnId;
 
         if (turnId) {
@@ -704,6 +1252,12 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
               fallbackPreview = previewSnippet;
             }
           }
+        } else {
+          warnValidation(
+            "event_msg_unresolved_user_message_turn",
+            "event_msg user_message could not be attached to a turn.",
+            lineNumber
+          );
         }
 
         continue;
@@ -758,17 +1312,79 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
     }
 
     if (parsed.type !== "response_item") {
+      if (parsed.type === "compacted" && parsed.payload !== undefined && parsed.payload !== null && !isRecord(parsed.payload)) {
+        warnValidation(
+          "compacted_invalid_payload",
+          "compacted payload is not an object; ignoring it.",
+          lineNumber
+        );
+      }
       continue;
     }
 
-    const payload = parsed.payload ?? {};
+    if (!isRecord(parsed.payload)) {
+      return failValidation(
+        "response_item_invalid_payload",
+        "response_item payload must be an object.",
+        lineNumber
+      );
+    }
+
+    const payload = parsed.payload;
+
+    if (!isNonEmptyString(payload.type)) {
+      return failValidation(
+        "response_item_missing_type",
+        "response_item must include payload.type as a string.",
+        lineNumber
+      );
+    }
+
+    incrementTypeCount(validationState.observedTypes.responseItem, payload.type);
+
+    if (!KNOWN_RESPONSE_ITEM_TYPES.has(payload.type)) {
+      warnValidation(
+        "response_item_unknown_type",
+        `Encountered unknown response_item payload.type "${payload.type}".`,
+        lineNumber,
+        payload.type
+      );
+    }
+
     const turnId = resolveResponseItemTurnId(payload, activeTurnId);
 
     if (!turnId) {
+      warnValidation(
+        "response_item_unresolved_turn_id",
+        "response_item could not be attached to a turn and was skipped.",
+        lineNumber,
+        payload.type
+      );
       continue;
     }
 
     if (payload.type === "message") {
+      if (payload.role !== undefined && payload.role !== null && typeof payload.role !== "string") {
+        warnValidation(
+          "response_item_invalid_message_role",
+          "response_item message role is not a string; defaulting to assistant.",
+          lineNumber
+        );
+      }
+
+      if (
+        payload.content !== undefined &&
+        payload.content !== null &&
+        !Array.isArray(payload.content) &&
+        typeof payload.text !== "string"
+      ) {
+        warnValidation(
+          "response_item_unrecognized_message_shape",
+          "response_item message text shape is unrecognized; storing empty text.",
+          lineNumber
+        );
+      }
+
       const textContent = extractTextFromMessage(payload);
       const role = payload.role ?? "assistant";
       addTurnItem(
@@ -819,11 +1435,10 @@ function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fi
   }
 
   if (!sessionId) {
-    return {
-      ok: false,
-      reason: "missing_session_meta",
-      filePath
-    };
+    return failValidation(
+      "session_file_missing_session_meta",
+      "Session file does not contain a valid session_meta entry."
+    );
   }
 
   const titleEntry = sessionIndex.get(sessionId);
@@ -1449,6 +2064,41 @@ function finishSyncRun(database, syncRunId, status, completedAt, details) {
     .run(status, completedAt, JSON.stringify(details), syncRunId);
 }
 
+function persistValidationLogs(database, syncRunId, validationState, createdAt) {
+  const logEntries = listValidationLogEntries(validationState);
+
+  if (!logEntries.length) {
+    return;
+  }
+
+  const insertLogStatement = database.prepare(`
+    INSERT INTO import_validation_logs (
+      sync_run_id,
+      severity,
+      scope,
+      file_path,
+      code,
+      message,
+      line_number,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const entry of logEntries) {
+    insertLogStatement.run(
+      syncRunId,
+      entry.severity,
+      entry.scope,
+      entry.filePath ?? null,
+      entry.code,
+      entry.message,
+      entry.lineNumber ?? null,
+      createdAt
+    );
+  }
+}
+
 function getImporterLayoutVersion(database) {
   const value = getImporterMetaValue(database, IMPORTER_LAYOUT_VERSION_KEY);
 
@@ -1497,27 +2147,8 @@ function importCodexSessions(database, options = {}) {
     database,
     SESSION_INDEX_SIGNATURE_KEY
   );
-  const previousGlobalStateSignature = getImporterMetaValue(
-    database,
-    GLOBAL_STATE_SIGNATURE_KEY
-  );
-  const sessionIndex = loadSessionIndex(codexHome);
-  const codexStateIndex = loadCodexStateIndex(codexHome);
-  const files = discoverSessionFiles(sessionsRoot);
-  const currentSourceFiles = new Map(
-    files.map((filePath) => [filePath, createSourceFileSnapshot(filePath)])
-  );
-  const trackedSourceFiles = listTrackedSourceFiles(database);
-  const forceReparseAllFiles =
-    trackedSourceFiles.size > 0 &&
-    (sessionIndexSignature !== previousSessionIndexSignature ||
-      globalStateSignature !== previousGlobalStateSignature);
-  const bootstrapMissingSourceFiles =
-    trackedSourceFiles.size === 0
-      ? listExistingThreadSourceFiles(database).filter(
-          (sourceFile) => !currentSourceFiles.has(sourceFile.sourcePath)
-        )
-      : [];
+  const previousGlobalStateSignature = getImporterMetaValue(database, GLOBAL_STATE_SIGNATURE_KEY);
+  const validationState = createValidationState();
 
   const result = {
     syncRunId,
@@ -1525,7 +2156,7 @@ function importCodexSessions(database, options = {}) {
     completedAt: null,
     codexHome,
     sessionsRoot,
-    scannedFiles: files.length,
+    scannedFiles: 0,
     importedThreads: 0,
     importedTurns: 0,
     importedItems: 0,
@@ -1538,11 +2169,37 @@ function importCodexSessions(database, options = {}) {
     errorFiles: 0,
     reparsedFiles: 0,
     rebuiltLibrary: needsFullRebuild,
-    forcedFileReparse: forceReparseAllFiles,
+    forcedFileReparse: false,
+    warnings: [],
+    validationSummary: buildValidationSummary(validationState),
     errors: []
   };
 
   try {
+    const sessionIndex = loadSessionIndex(codexHome, validationState);
+    const codexStateIndex = loadCodexStateIndex(codexHome, {
+      validationState,
+      strict: true
+    });
+    const files = discoverSessionFiles(sessionsRoot);
+    const currentSourceFiles = new Map(
+      files.map((filePath) => [filePath, createSourceFileSnapshot(filePath)])
+    );
+    const trackedSourceFiles = listTrackedSourceFiles(database);
+    const forceReparseAllFiles =
+      trackedSourceFiles.size > 0 &&
+      (sessionIndexSignature !== previousSessionIndexSignature ||
+        globalStateSignature !== previousGlobalStateSignature);
+    const bootstrapMissingSourceFiles =
+      trackedSourceFiles.size === 0
+        ? listExistingThreadSourceFiles(database).filter(
+            (sourceFile) => !currentSourceFiles.has(sourceFile.sourcePath)
+          )
+        : [];
+
+    result.scannedFiles = files.length;
+    result.forcedFileReparse = forceReparseAllFiles;
+
     const parseQueue = new Set();
     const attemptedParseFiles = new Set();
     const parsedSessionsByFilePath = new Map();
@@ -1598,13 +2255,15 @@ function importCodexSessions(database, options = {}) {
           sessionIndex,
           codexHome,
           codexStateIndex,
-          sourceFile
+          sourceFile,
+          validationState
         );
 
         if (!parsed.ok) {
           result.skippedFiles += 1;
           result.errorFiles += 1;
           result.errors.push({
+            code: parsed.code ?? "session_file_invalid_structure",
             filePath,
             reason: parsed.reason
           });
@@ -1752,7 +2411,10 @@ function importCodexSessions(database, options = {}) {
     setImporterLayoutVersion(database, IMPORTER_LAYOUT_VERSION);
     setImporterMetaValue(database, SESSION_INDEX_SIGNATURE_KEY, sessionIndexSignature);
     setImporterMetaValue(database, GLOBAL_STATE_SIGNATURE_KEY, globalStateSignature);
+    result.warnings = validationState.warnings;
+    result.validationSummary = buildValidationSummary(validationState);
     result.completedAt = new Date().toISOString();
+    persistValidationLogs(database, syncRunId, validationState, result.completedAt);
     finishSyncRun(database, syncRunId, "completed", result.completedAt, result);
     return result;
   } catch (error) {
@@ -1761,11 +2423,15 @@ function importCodexSessions(database, options = {}) {
     } catch {
       // Ignore rollback errors when no import transaction is active.
     }
+    result.warnings = validationState.warnings;
+    result.validationSummary = buildValidationSummary(validationState);
     result.completedAt = new Date().toISOString();
     result.errors.push({
+      code: "import_failed",
       filePath: null,
       reason: error instanceof Error ? error.message : String(error)
     });
+    persistValidationLogs(database, syncRunId, validationState, result.completedAt);
     finishSyncRun(database, syncRunId, "failed", result.completedAt, result);
     throw error;
   }

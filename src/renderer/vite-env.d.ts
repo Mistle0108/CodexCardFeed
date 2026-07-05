@@ -43,7 +43,41 @@ type ImportResult = {
   reparsedFiles: number;
   rebuiltLibrary: boolean;
   forcedFileReparse: boolean;
+  warnings: Array<{
+    scope: string;
+    filePath: string | null;
+    code: string;
+    message: string;
+    lineNumber: number | null;
+  }>;
+  validationSummary: {
+    warningCount: number;
+    errorCount: number;
+    sessionIndex: {
+      lineCount: number;
+      validEntryCount: number;
+      invalidLineCount: number;
+    };
+    globalState: {
+      readCount: number;
+    };
+    observedTypes: {
+      topLevel: Array<{
+        type: string;
+        count: number;
+      }>;
+      eventMsg: Array<{
+        type: string;
+        count: number;
+      }>;
+      responseItem: Array<{
+        type: string;
+        count: number;
+      }>;
+    };
+  };
   errors: Array<{
+    code?: string;
     filePath: string | null;
     reason: string;
   }>;
