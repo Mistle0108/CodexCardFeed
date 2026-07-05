@@ -1,6 +1,6 @@
 const { DatabaseSync } = require("node:sqlite");
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 function createMetaTable(database) {
   database.exec(`
@@ -196,10 +196,34 @@ function migrationThree(database) {
   setMetaValue(database, "schema_version", "3");
 }
 
+function migrationFour(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS session_source_files (
+      source_path TEXT PRIMARY KEY,
+      thread_id TEXT,
+      file_size INTEGER NOT NULL DEFAULT 0,
+      modified_at_ms INTEGER NOT NULL DEFAULT 0,
+      modified_at TEXT,
+      status TEXT NOT NULL,
+      last_imported_at TEXT NOT NULL,
+      last_error TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_source_files_thread
+      ON session_source_files (thread_id);
+
+    CREATE INDEX IF NOT EXISTS idx_session_source_files_status
+      ON session_source_files (status, last_imported_at DESC);
+  `);
+
+  setMetaValue(database, "schema_version", "4");
+}
+
 const migrations = [
   { version: 1, apply: migrationOne },
   { version: 2, apply: migrationTwo },
-  { version: 3, apply: migrationThree }
+  { version: 3, apply: migrationThree },
+  { version: 4, apply: migrationFour }
 ];
 
 function runMigrations(database) {

@@ -35,7 +35,14 @@ type ImportResult = {
   importedItems: number;
   importedProjects: number;
   skippedFiles: number;
+  newFiles: number;
+  changedFiles: number;
+  unchangedFiles: number;
+  missingFiles: number;
+  errorFiles: number;
+  reparsedFiles: number;
   rebuiltLibrary: boolean;
+  forcedFileReparse: boolean;
   errors: Array<{
     filePath: string | null;
     reason: string;
