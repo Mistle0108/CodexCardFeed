@@ -143,6 +143,12 @@ type TurnItem = {
   createdAt: string | null;
 };
 
+type IntegritySampleRef = {
+  label: string;
+  threadId: string | null;
+  turnId: string | null;
+};
+
 type IntegrityCheckResult = {
   key: string;
   label: string;
@@ -150,7 +156,7 @@ type IntegrityCheckResult = {
   severity: "error" | "warning";
   status: "pass" | "fail";
   affectedCount: number;
-  sampleRefs: string[];
+  sampleRefs: IntegritySampleRef[];
   message: string;
 };
 

@@ -131,6 +131,12 @@ select {
   gap: 8px;
 }
 
+.sidebar-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-kicker {
   margin: 0 0 6px;
   color: #766b60;
@@ -518,14 +524,6 @@ select {
   gap: 10px;
 }
 
-.panel-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .panel-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -560,22 +558,6 @@ select {
 
 .panel-toolbar-meta {
   flex: 0 0 auto;
-}
-
-.integrity-toolbar-meta {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(44, 58, 78, 0.06);
-}
-
-.integrity-toolbar-meta.is-clean {
-  color: #1f7a43;
-  background: rgba(34, 197, 94, 0.12);
-}
-
-.integrity-toolbar-meta.has-issues {
-  color: #a15e00;
-  background: rgba(245, 158, 11, 0.16);
 }
 
 .workspace-kicker {
@@ -1267,10 +1249,6 @@ select {
   margin-top: 0;
 }
 
-.integrity-modal {
-  width: min(980px, 100%);
-}
-
 .integrity-summary-panel,
 .integrity-section {
   padding: 12px;
@@ -1384,11 +1362,29 @@ select {
   margin-top: 4px;
 }
 
+.integrity-sample-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #2d6cbe;
+  font-size: inherit;
+  line-height: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(45, 108, 190, 0.3);
+  cursor: pointer;
+}
+
+.integrity-sample-link:hover {
+  color: #1d548f;
+  text-decoration-color: rgba(29, 84, 143, 0.44);
+}
+
 .integrity-empty-state {
   margin: 0;
 }
 
-.diagnosis-modal {
+.diagnostics-modal {
   width: min(1040px, 100%);
 }
 
@@ -1598,7 +1594,6 @@ select {
   .question-card-meta,
   .turn-card-actions,
   .panel-toolbar,
-  .panel-toolbar-actions,
   .modal-header,
   .diagnosis-section-header,
   .diagnosis-issue-header,
