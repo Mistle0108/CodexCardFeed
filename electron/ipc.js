@@ -9,6 +9,7 @@ function registerIpcHandlers({
   updateDatabasePath,
   resetDatabasePath,
   runIntegrityCheck,
+  runSessionDiagnosis,
   listProjects,
   listThreads,
   listTurns,
@@ -44,6 +45,10 @@ function registerIpcHandlers({
 
   ipcMain.handle("library:run-integrity-check", () => {
     return runIntegrityCheck();
+  });
+
+  ipcMain.handle("library:run-session-diagnosis", () => {
+    return runSessionDiagnosis();
   });
 
   ipcMain.handle("library:list-projects", () => {

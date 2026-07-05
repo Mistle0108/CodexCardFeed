@@ -166,6 +166,43 @@ type IntegrityReport = {
   checks: IntegrityCheckResult[];
 };
 
+type SessionDiagnosisIssue = {
+  code: string;
+  category: "duplicate" | "import_gap" | "source_problem" | "parse_problem";
+  severity: "error" | "warning";
+  title: string;
+  message: string;
+  sourcePath: string | null;
+  parsedThreadId: string | null;
+  trackedThreadId: string | null;
+  trackedStatus: string | null;
+  relatedSourcePaths: string[];
+  relatedThreadIds: string[];
+  suggestedAction: "reimport" | "restore_source" | "inspect_mapping" | "inspect_db" | "inspect_source" | "inspect";
+  lastImportedAt: string | null;
+  lastError: string | null;
+};
+
+type SessionDiagnosisReport = {
+  checkedAt: string;
+  codexHome: string;
+  sessionsRoot: string;
+  summary: {
+    scannedFiles: number;
+    trackedFiles: number;
+    dbThreads: number;
+    duplicateCount: number;
+    importGapCount: number;
+    sourceProblemCount: number;
+    parseProblemCount: number;
+    totalIssueCount: number;
+  };
+  duplicates: SessionDiagnosisIssue[];
+  importGaps: SessionDiagnosisIssue[];
+  sourceProblems: SessionDiagnosisIssue[];
+  parseProblems: SessionDiagnosisIssue[];
+};
+
 interface Window {
   codexCardFeed: {
     getShellInfo(): Promise<ShellInfo>;
@@ -176,6 +213,7 @@ interface Window {
     updateDatabasePath(databasePath: string): Promise<ShellInfo>;
     resetDatabasePath(): Promise<ShellInfo>;
     runIntegrityCheck(): Promise<IntegrityReport>;
+    runSessionDiagnosis(): Promise<SessionDiagnosisReport>;
     listProjects(): Promise<ProjectListItem[]>;
     listThreads(projectId?: string | null): Promise<ThreadListItem[]>;
     listTurns(threadId: string): Promise<TurnListItem[]>;

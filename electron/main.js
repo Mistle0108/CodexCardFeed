@@ -13,6 +13,7 @@ const { runIntegrityCheck } = require("./integrity");
 const {
   getDefaultCodexHome,
   importCodexSessions,
+  runSessionDiagnosis,
   listSidebarWorkspaceRoots
 } = require("./importer");
 const { getDefaultDatabasePath, loadPathSettings, persistPathSettings } = require("./path-settings");
@@ -197,6 +198,11 @@ app.whenReady().then(() => {
     },
     runIntegrityCheck() {
       return runIntegrityCheck(databaseState.database);
+    },
+    runSessionDiagnosis() {
+      return runSessionDiagnosis(databaseState.database, {
+        codexHome: getCurrentCodexHome()
+      });
     },
     listProjects() {
       const sidebarWorkspaceRoots = new Set(

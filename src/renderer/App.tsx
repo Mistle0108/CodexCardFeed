@@ -33,6 +33,30 @@ function formatTokenLabel(value: number) {
   return `${formatInteger(value)} tok`;
 }
 
+function formatSuggestedActionLabel(value: SessionDiagnosisIssue["suggestedAction"]) {
+  if (value === "reimport") {
+    return "Reimport";
+  }
+
+  if (value === "restore_source") {
+    return "Restore source";
+  }
+
+  if (value === "inspect_mapping") {
+    return "Inspect mapping";
+  }
+
+  if (value === "inspect_db") {
+    return "Inspect DB";
+  }
+
+  if (value === "inspect_source") {
+    return "Inspect source";
+  }
+
+  return "Inspect";
+}
+
 type DetailMetaEntry = {
   label: string;
   value: string | string[];
@@ -525,12 +549,16 @@ export default function App() {
   const [turns, setTurns] = useState<TurnListItem[]>([]);
   const [turnItems, setTurnItems] = useState<TurnItem[]>([]);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const [sessionDiagnosisReport, setSessionDiagnosisReport] =
+    useState<SessionDiagnosisReport | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [isTurnModalOpen, setIsTurnModalOpen] = useState(false);
   const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
+  const [isSessionDiagnosisModalOpen, setIsSessionDiagnosisModalOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isIntegrityChecking, setIsIntegrityChecking] = useState(false);
+  const [isSessionDiagnosisRunning, setIsSessionDiagnosisRunning] = useState(false);
   const [isLibraryLoading, setIsLibraryLoading] = useState(true);
   const [isPathPanelOpen, setIsPathPanelOpen] = useState(false);
   const [codexHomeDraft, setCodexHomeDraft] = useState("");
@@ -566,6 +594,14 @@ export default function App() {
     integrityReport?.checks.filter((check) => check.status === "fail") ?? [];
   const integrityPassedChecks =
     integrityReport?.checks.filter((check) => check.status === "pass") ?? [];
+  const sessionDiagnosisIssues = sessionDiagnosisReport
+    ? [
+        ...sessionDiagnosisReport.duplicates,
+        ...sessionDiagnosisReport.importGaps,
+        ...sessionDiagnosisReport.sourceProblems,
+        ...sessionDiagnosisReport.parseProblems
+      ]
+    : [];
   const sidebarProjects = projects.filter((project) => project.isSidebarProject);
   const historicalProjects = projects.filter((project) => !project.isSidebarProject);
   const allProjectIds = new Set(projects.map((project) => project.id));
@@ -718,7 +754,7 @@ export default function App() {
   }, [expandedProjectIds]);
 
   useEffect(() => {
-    if (!isTurnModalOpen && !isIntegrityModalOpen) {
+    if (!isTurnModalOpen && !isIntegrityModalOpen && !isSessionDiagnosisModalOpen) {
       return;
     }
 
@@ -726,6 +762,7 @@ export default function App() {
       if (event.key === "Escape") {
         setIsTurnModalOpen(false);
         setIsIntegrityModalOpen(false);
+        setIsSessionDiagnosisModalOpen(false);
       }
     }
 
@@ -733,7 +770,7 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isTurnModalOpen, isIntegrityModalOpen]);
+  }, [isTurnModalOpen, isIntegrityModalOpen, isSessionDiagnosisModalOpen]);
 
   useEffect(() => {
     setIsAdditionalItemsVisible(false);
@@ -802,6 +839,10 @@ export default function App() {
     setIsIntegrityModalOpen(false);
   }
 
+  function handleCloseSessionDiagnosisModal() {
+    setIsSessionDiagnosisModalOpen(false);
+  }
+
   function handleDetailItemToggle(itemId: string) {
     setExpandedDetailItemIds((current) => ({
       ...current,
@@ -831,6 +872,21 @@ export default function App() {
       setLoadError(getErrorMessage(error));
     } finally {
       setIsIntegrityChecking(false);
+    }
+  }
+
+  async function handleRunSessionDiagnosis() {
+    setIsSessionDiagnosisRunning(true);
+    setLoadError(null);
+
+    try {
+      const nextReport = await window.codexCardFeed.runSessionDiagnosis();
+      setSessionDiagnosisReport(nextReport);
+      setIsSessionDiagnosisModalOpen(true);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSessionDiagnosisRunning(false);
     }
   }
 
@@ -1295,6 +1351,14 @@ export default function App() {
               >
                 {isIntegrityChecking ? "Checking..." : "Data check"}
               </button>
+              <button
+                className="secondary-button"
+                disabled={isSessionDiagnosisRunning}
+                onClick={() => void handleRunSessionDiagnosis()}
+                type="button"
+              >
+                {isSessionDiagnosisRunning ? "Diagnosing..." : "Session diagnosis"}
+              </button>
             </div>
           </div>
         </div>
@@ -1385,6 +1449,383 @@ export default function App() {
           )}
         </section>
       </section>
+
+      {isSessionDiagnosisModalOpen && sessionDiagnosisReport ? (
+        <div
+          className="modal-overlay"
+          onClick={handleCloseSessionDiagnosisModal}
+          role="presentation"
+        >
+          <section
+            className="card modal-dialog diagnosis-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="workspace-kicker">Session diagnosis</p>
+                <h2>Session duplicate and import gap diagnosis</h2>
+                <p className="muted">
+                  Last checked {formatDateTime(sessionDiagnosisReport.checkedAt)}
+                </p>
+              </div>
+              <div className="modal-header-actions">
+                <button
+                  className="secondary-button"
+                  disabled={isSessionDiagnosisRunning}
+                  onClick={() => void handleRunSessionDiagnosis()}
+                  type="button"
+                >
+                  {isSessionDiagnosisRunning ? "Diagnosing..." : "Run again"}
+                </button>
+                <button
+                  className="modal-close"
+                  onClick={handleCloseSessionDiagnosisModal}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-scroll">
+              <div className="detail-body">
+                <section className="diagnosis-summary-panel">
+                  <dl className="diagnosis-summary-grid">
+                    <div>
+                      <dt>Current files</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.scannedFiles)}</dd>
+                    </div>
+                    <div>
+                      <dt>Tracked files</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.trackedFiles)}</dd>
+                    </div>
+                    <div>
+                      <dt>DB threads</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.dbThreads)}</dd>
+                    </div>
+                    <div>
+                      <dt>Issues</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.totalIssueCount)}</dd>
+                    </div>
+                    <div>
+                      <dt>Import gaps</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.importGapCount)}</dd>
+                    </div>
+                    <div>
+                      <dt>Duplicates</dt>
+                      <dd>{formatInteger(sessionDiagnosisReport.summary.duplicateCount)}</dd>
+                    </div>
+                  </dl>
+
+                  <dl className="diagnosis-path-grid">
+                    <div>
+                      <dt>Codex source</dt>
+                      <dd>{sessionDiagnosisReport.codexHome}</dd>
+                    </div>
+                    <div>
+                      <dt>Sessions root</dt>
+                      <dd>{sessionDiagnosisReport.sessionsRoot}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="diagnosis-section">
+                  <div className="diagnosis-section-header">
+                    <strong>Import gaps</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(sessionDiagnosisReport.importGaps.length, "issue")}
+                    </span>
+                  </div>
+
+                  {sessionDiagnosisReport.importGaps.length ? (
+                    <div className="diagnosis-issue-list">
+                      {sessionDiagnosisReport.importGaps.map((issue, issueIndex) => (
+                        <article
+                          className="diagnosis-issue-card"
+                          key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                        >
+                          <div className="diagnosis-issue-header">
+                            <div>
+                              <strong>{issue.title}</strong>
+                              <p className="diagnosis-issue-message">{issue.message}</p>
+                            </div>
+                            <div className="diagnosis-issue-pills">
+                              <span
+                                className={`integrity-severity-pill ${
+                                  issue.severity === "error" ? "is-error" : "is-warning"
+                                }`}
+                              >
+                                {issue.severity}
+                              </span>
+                              <span className="diagnosis-action-pill">
+                                {formatSuggestedActionLabel(issue.suggestedAction)}
+                              </span>
+                            </div>
+                          </div>
+                          <dl className="diagnosis-meta-grid">
+                            {issue.sourcePath ? (
+                              <div>
+                                <dt>Source</dt>
+                                <dd>{issue.sourcePath}</dd>
+                              </div>
+                            ) : null}
+                            {issue.parsedThreadId ? (
+                              <div>
+                                <dt>Parsed</dt>
+                                <dd>{issue.parsedThreadId}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedThreadId ? (
+                              <div>
+                                <dt>Tracked</dt>
+                                <dd>{issue.trackedThreadId}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedStatus ? (
+                              <div>
+                                <dt>Status</dt>
+                                <dd>{issue.trackedStatus}</dd>
+                              </div>
+                            ) : null}
+                            {issue.lastImportedAt ? (
+                              <div>
+                                <dt>Imported</dt>
+                                <dd>{formatDateTime(issue.lastImportedAt)}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No import gaps were detected.
+                    </p>
+                  )}
+                </section>
+
+                <section className="diagnosis-section">
+                  <div className="diagnosis-section-header">
+                    <strong>Duplicate conflicts</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(sessionDiagnosisReport.duplicates.length, "issue")}
+                    </span>
+                  </div>
+
+                  {sessionDiagnosisReport.duplicates.length ? (
+                    <div className="diagnosis-issue-list">
+                      {sessionDiagnosisReport.duplicates.map((issue, issueIndex) => (
+                        <article
+                          className="diagnosis-issue-card"
+                          key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                        >
+                          <div className="diagnosis-issue-header">
+                            <div>
+                              <strong>{issue.title}</strong>
+                              <p className="diagnosis-issue-message">{issue.message}</p>
+                            </div>
+                            <div className="diagnosis-issue-pills">
+                              <span
+                                className={`integrity-severity-pill ${
+                                  issue.severity === "error" ? "is-error" : "is-warning"
+                                }`}
+                              >
+                                {issue.severity}
+                              </span>
+                              <span className="diagnosis-action-pill">
+                                {formatSuggestedActionLabel(issue.suggestedAction)}
+                              </span>
+                            </div>
+                          </div>
+                          <dl className="diagnosis-meta-grid">
+                            {issue.sourcePath ? (
+                              <div>
+                                <dt>Source</dt>
+                                <dd>{issue.sourcePath}</dd>
+                              </div>
+                            ) : null}
+                            {issue.relatedThreadIds.length ? (
+                              <div className="is-stacked">
+                                <dt>Threads</dt>
+                                <dd>
+                                  <ul className="detail-query-list">
+                                    {issue.relatedThreadIds.map((threadId) => (
+                                      <li key={`${issue.code}:${threadId}`}>{threadId}</li>
+                                    ))}
+                                  </ul>
+                                </dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No duplicate DB conflicts were detected.
+                    </p>
+                  )}
+                </section>
+
+                <section className="diagnosis-section">
+                  <div className="diagnosis-section-header">
+                    <strong>Source problems</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(sessionDiagnosisReport.sourceProblems.length, "issue")}
+                    </span>
+                  </div>
+
+                  {sessionDiagnosisReport.sourceProblems.length ? (
+                    <div className="diagnosis-issue-list">
+                      {sessionDiagnosisReport.sourceProblems.map((issue, issueIndex) => (
+                        <article
+                          className="diagnosis-issue-card"
+                          key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                        >
+                          <div className="diagnosis-issue-header">
+                            <div>
+                              <strong>{issue.title}</strong>
+                              <p className="diagnosis-issue-message">{issue.message}</p>
+                            </div>
+                            <div className="diagnosis-issue-pills">
+                              <span
+                                className={`integrity-severity-pill ${
+                                  issue.severity === "error" ? "is-error" : "is-warning"
+                                }`}
+                              >
+                                {issue.severity}
+                              </span>
+                              <span className="diagnosis-action-pill">
+                                {formatSuggestedActionLabel(issue.suggestedAction)}
+                              </span>
+                            </div>
+                          </div>
+                          <dl className="diagnosis-meta-grid">
+                            {issue.sourcePath ? (
+                              <div>
+                                <dt>Source</dt>
+                                <dd>{issue.sourcePath}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedThreadId ? (
+                              <div>
+                                <dt>Tracked</dt>
+                                <dd>{issue.trackedThreadId}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedStatus ? (
+                              <div>
+                                <dt>Status</dt>
+                                <dd>{issue.trackedStatus}</dd>
+                              </div>
+                            ) : null}
+                            {issue.lastImportedAt ? (
+                              <div>
+                                <dt>Imported</dt>
+                                <dd>{formatDateTime(issue.lastImportedAt)}</dd>
+                              </div>
+                            ) : null}
+                            {issue.lastError ? (
+                              <div>
+                                <dt>Last error</dt>
+                                <dd>{issue.lastError}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No source tracking problems were detected.
+                    </p>
+                  )}
+                </section>
+
+                <section className="diagnosis-section">
+                  <div className="diagnosis-section-header">
+                    <strong>Parse problems</strong>
+                    <span className="mini-meta">
+                      {formatCountLabel(sessionDiagnosisReport.parseProblems.length, "issue")}
+                    </span>
+                  </div>
+
+                  {sessionDiagnosisReport.parseProblems.length ? (
+                    <div className="diagnosis-issue-list">
+                      {sessionDiagnosisReport.parseProblems.map((issue, issueIndex) => (
+                        <article
+                          className="diagnosis-issue-card"
+                          key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                        >
+                          <div className="diagnosis-issue-header">
+                            <div>
+                              <strong>{issue.title}</strong>
+                              <p className="diagnosis-issue-message">{issue.message}</p>
+                            </div>
+                            <div className="diagnosis-issue-pills">
+                              <span
+                                className={`integrity-severity-pill ${
+                                  issue.severity === "error" ? "is-error" : "is-warning"
+                                }`}
+                              >
+                                {issue.severity}
+                              </span>
+                              <span className="diagnosis-action-pill">
+                                {formatSuggestedActionLabel(issue.suggestedAction)}
+                              </span>
+                            </div>
+                          </div>
+                          <dl className="diagnosis-meta-grid">
+                            {issue.sourcePath ? (
+                              <div>
+                                <dt>Source</dt>
+                                <dd>{issue.sourcePath}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedThreadId ? (
+                              <div>
+                                <dt>Tracked</dt>
+                                <dd>{issue.trackedThreadId}</dd>
+                              </div>
+                            ) : null}
+                            {issue.trackedStatus ? (
+                              <div>
+                                <dt>Status</dt>
+                                <dd>{issue.trackedStatus}</dd>
+                              </div>
+                            ) : null}
+                            {issue.lastError ? (
+                              <div>
+                                <dt>Last error</dt>
+                                <dd>{issue.lastError}</dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No parse problems were detected.
+                    </p>
+                  )}
+                </section>
+
+                {sessionDiagnosisIssues.length === 0 ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Result</strong>
+                    </div>
+                    <p className="empty-state integrity-empty-state">
+                      Current Codex source files and DB session tracking look consistent.
+                    </p>
+                  </section>
+                ) : null}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isIntegrityModalOpen && integrityReport ? (
         <div

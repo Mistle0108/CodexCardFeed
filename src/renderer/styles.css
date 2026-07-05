@@ -1388,6 +1388,130 @@ select {
   margin: 0;
 }
 
+.diagnosis-modal {
+  width: min(1040px, 100%);
+}
+
+.diagnosis-summary-panel,
+.diagnosis-section {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+  display: grid;
+  gap: 12px;
+}
+
+.diagnosis-summary-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnosis-summary-grid div,
+.diagnosis-path-grid div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.06);
+}
+
+.diagnosis-summary-grid dt,
+.diagnosis-path-grid dt,
+.diagnosis-meta-grid dt {
+  margin-bottom: 4px;
+  color: #5f7695;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.diagnosis-summary-grid dd,
+.diagnosis-path-grid dd,
+.diagnosis-meta-grid dd {
+  margin: 0;
+  color: #223045;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.diagnosis-summary-grid dd {
+  font-size: 0.92rem;
+}
+
+.diagnosis-path-grid,
+.diagnosis-meta-grid {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.diagnosis-path-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnosis-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnosis-meta-grid .is-stacked {
+  grid-column: 1 / -1;
+}
+
+.diagnosis-section-header,
+.diagnosis-issue-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.diagnosis-issue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnosis-issue-card {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
+.diagnosis-issue-card strong {
+  color: #223045;
+  font-size: 0.84rem;
+}
+
+.diagnosis-issue-message {
+  margin: 4px 0 0;
+  color: #5b6472;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.diagnosis-issue-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diagnosis-action-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(78, 98, 128, 0.12);
+  color: #425674;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1460,7 +1584,10 @@ select {
 
   .detail-meta,
   .token-grid,
-  .integrity-summary-grid {
+  .integrity-summary-grid,
+  .diagnosis-summary-grid,
+  .diagnosis-path-grid,
+  .diagnosis-meta-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1473,6 +1600,8 @@ select {
   .panel-toolbar,
   .panel-toolbar-actions,
   .modal-header,
+  .diagnosis-section-header,
+  .diagnosis-issue-header,
   .integrity-section-header,
   .integrity-check-header,
   .sidebar-section-header,
