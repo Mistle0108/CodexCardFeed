@@ -518,6 +518,14 @@ select {
   gap: 10px;
 }
 
+.panel-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .panel-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -552,6 +560,22 @@ select {
 
 .panel-toolbar-meta {
   flex: 0 0 auto;
+}
+
+.integrity-toolbar-meta {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(44, 58, 78, 0.06);
+}
+
+.integrity-toolbar-meta.is-clean {
+  color: #1f7a43;
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.integrity-toolbar-meta.has-issues {
+  color: #a15e00;
+  background: rgba(245, 158, 11, 0.16);
 }
 
 .workspace-kicker {
@@ -1243,6 +1267,127 @@ select {
   margin-top: 0;
 }
 
+.integrity-modal {
+  width: min(980px, 100%);
+}
+
+.integrity-summary-panel,
+.integrity-section {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+  display: grid;
+  gap: 12px;
+}
+
+.integrity-summary-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.integrity-summary-grid div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.06);
+}
+
+.integrity-summary-grid dt {
+  margin-bottom: 4px;
+  color: #5f7695;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.integrity-summary-grid dd {
+  margin: 0;
+  color: #223045;
+  font-size: 0.92rem;
+}
+
+.integrity-section-header,
+.integrity-check-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.integrity-check-list,
+.integrity-pass-list {
+  display: grid;
+  gap: 8px;
+}
+
+.integrity-check-card,
+.integrity-pass-row {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+}
+
+.integrity-check-card strong,
+.integrity-pass-row strong {
+  color: #223045;
+  font-size: 0.84rem;
+}
+
+.integrity-check-description,
+.integrity-check-message {
+  margin: 4px 0 0;
+  color: #5b6472;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.integrity-check-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.integrity-severity-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.integrity-severity-pill.is-error {
+  color: #b74444;
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.integrity-severity-pill.is-warning {
+  color: #a15e00;
+  background: rgba(245, 158, 11, 0.16);
+}
+
+.integrity-sample-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: #334256;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.integrity-sample-list li + li {
+  margin-top: 4px;
+}
+
+.integrity-empty-state {
+  margin: 0;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1314,7 +1459,8 @@ select {
   }
 
   .detail-meta,
-  .token-grid {
+  .token-grid,
+  .integrity-summary-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1325,7 +1471,10 @@ select {
   .question-card-meta,
   .turn-card-actions,
   .panel-toolbar,
+  .panel-toolbar-actions,
   .modal-header,
+  .integrity-section-header,
+  .integrity-check-header,
   .sidebar-section-header,
   .sidebar-section-header-actions {
     flex-direction: column;

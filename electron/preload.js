@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   resetDatabasePath() {
     return ipcRenderer.invoke("app:reset-database-path");
   },
+  runIntegrityCheck() {
+    return ipcRenderer.invoke("library:run-integrity-check");
+  },
   listProjects() {
     return ipcRenderer.invoke("library:list-projects");
   },
