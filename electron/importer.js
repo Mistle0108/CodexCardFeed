@@ -5,6 +5,11 @@ const path = require("node:path");
 
 const IMPORTER_LAYOUT_VERSION = 3;
 const IMPORTER_LAYOUT_VERSION_KEY = "codex_card_feed_importer_layout_version";
+const SESSION_INDEX_SIGNATURE_KEY = "codex_card_feed_session_index_signature";
+const GLOBAL_STATE_SIGNATURE_KEY = "codex_card_feed_global_state_signature";
+const SOURCE_FILE_STATUS_ACTIVE = "active";
+const SOURCE_FILE_STATUS_MISSING = "missing";
+const SOURCE_FILE_STATUS_ERROR = "error";
 
 function getDefaultCodexHome() {
   return path.join(os.homedir(), ".codex");
@@ -24,6 +29,26 @@ function getGlobalStatePath(codexHome = getDefaultCodexHome()) {
 
 function listSidebarWorkspaceRoots(codexHome = getDefaultCodexHome()) {
   return [...loadCodexStateIndex(codexHome).savedWorkspaceRoots];
+}
+
+function getOptionalFileSignature(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return "";
+  }
+
+  const fileStat = fs.statSync(filePath);
+  return `${Number(fileStat.size)}:${Math.trunc(fileStat.mtimeMs)}`;
+}
+
+function createSourceFileSnapshot(filePath) {
+  const fileStat = fs.statSync(filePath);
+
+  return {
+    sourcePath: filePath,
+    fileSize: Number(fileStat.size),
+    modifiedAtMs: Math.trunc(fileStat.mtimeMs),
+    modifiedAt: fileStat.mtime.toISOString()
+  };
 }
 
 function discoverSessionFiles(directoryPath) {
@@ -589,11 +614,11 @@ function resolveResponseItemTurnId(payload, activeTurnId) {
   return activeTurnId ?? null;
 }
 
-function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex) {
+function parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex, fileSnapshot = null) {
+  const sourceFileSnapshot = fileSnapshot ?? createSourceFileSnapshot(filePath);
   const fileContent = fs.readFileSync(filePath, "utf8");
   const lines = fileContent.split(/\r?\n/).filter((line) => line.trim());
-  const fileStat = fs.statSync(filePath);
-  const lastSeenAt = fileStat.mtime.toISOString();
+  const lastSeenAt = sourceFileSnapshot.modifiedAt;
 
   let sessionId = null;
   let threadCwd = null;
@@ -1213,6 +1238,189 @@ function upsertItem(database, item) {
     );
 }
 
+function getImporterMetaValue(database, key) {
+  const row = database
+    .prepare("SELECT value FROM app_meta WHERE key = ?")
+    .get(key);
+
+  return row?.value ?? null;
+}
+
+function setImporterMetaValue(database, key, value) {
+  database
+    .prepare(`
+      INSERT INTO app_meta (key, value)
+      VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `)
+    .run(key, value);
+}
+
+function listTrackedSourceFiles(database) {
+  return new Map(
+    database
+      .prepare(`
+        SELECT
+          source_path,
+          thread_id,
+          file_size,
+          modified_at_ms,
+          modified_at,
+          status,
+          last_imported_at,
+          last_error
+        FROM session_source_files
+      `)
+      .all()
+      .map((row) => [
+        row.source_path,
+        {
+          sourcePath: row.source_path,
+          threadId: row.thread_id ?? null,
+          fileSize: Number(row.file_size ?? 0),
+          modifiedAtMs: Number(row.modified_at_ms ?? 0),
+          modifiedAt: row.modified_at ?? null,
+          status: row.status,
+          lastImportedAt: row.last_imported_at,
+          lastError: row.last_error ?? null
+        }
+      ])
+  );
+}
+
+function listExistingThreadSourceFiles(database) {
+  return database
+    .prepare(`
+      SELECT
+        id,
+        source_session_path
+      FROM threads
+      WHERE source_session_path IS NOT NULL
+        AND source_session_path <> ''
+    `)
+    .all()
+    .map((row) => ({
+      threadId: row.id,
+      sourcePath: row.source_session_path
+    }));
+}
+
+function upsertTrackedSourceFile(database, sourceFile, importedAt) {
+  database
+    .prepare(`
+      INSERT INTO session_source_files (
+        source_path,
+        thread_id,
+        file_size,
+        modified_at_ms,
+        modified_at,
+        status,
+        last_imported_at,
+        last_error
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_path) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        file_size = excluded.file_size,
+        modified_at_ms = excluded.modified_at_ms,
+        modified_at = excluded.modified_at,
+        status = excluded.status,
+        last_imported_at = excluded.last_imported_at,
+        last_error = excluded.last_error
+    `)
+    .run(
+      sourceFile.sourcePath,
+      sourceFile.threadId,
+      sourceFile.fileSize,
+      sourceFile.modifiedAtMs,
+      sourceFile.modifiedAt,
+      sourceFile.status,
+      importedAt,
+      sourceFile.lastError ?? null
+    );
+}
+
+function hasTrackedSourceFileChanged(trackedSourceFile, currentSourceFile) {
+  if (!trackedSourceFile) {
+    return true;
+  }
+
+  if (trackedSourceFile.status !== SOURCE_FILE_STATUS_ACTIVE) {
+    return true;
+  }
+
+  return (
+    trackedSourceFile.fileSize !== currentSourceFile.fileSize ||
+    trackedSourceFile.modifiedAtMs !== currentSourceFile.modifiedAtMs
+  );
+}
+
+function deleteStaleItemsForTurn(database, turnId, itemIds) {
+  if (!itemIds.length) {
+    database.prepare("DELETE FROM items WHERE turn_id = ?").run(turnId);
+    return;
+  }
+
+  const placeholders = itemIds.map(() => "?").join(", ");
+  database
+    .prepare(`
+      DELETE FROM items
+      WHERE turn_id = ?
+        AND id NOT IN (${placeholders})
+    `)
+    .run(turnId, ...itemIds);
+}
+
+function deleteStaleTurnsForThread(database, threadId, turnIds) {
+  if (!turnIds.length) {
+    database.prepare("DELETE FROM turns WHERE thread_id = ?").run(threadId);
+    return;
+  }
+
+  const placeholders = turnIds.map(() => "?").join(", ");
+  database
+    .prepare(`
+      DELETE FROM turns
+      WHERE thread_id = ?
+        AND id NOT IN (${placeholders})
+    `)
+    .run(threadId, ...turnIds);
+}
+
+function reconcileThreadSnapshot(database, mergedSession, importedAt) {
+  upsertProject(database, mergedSession.project, importedAt);
+  upsertThread(database, mergedSession.thread);
+
+  const turnIds = [];
+
+  for (const turn of mergedSession.turns) {
+    turnIds.push(turn.id);
+    upsertTurn(database, turn);
+
+    const itemIds = [];
+
+    for (const item of turn.items) {
+      itemIds.push(item.id);
+      upsertItem(database, item);
+    }
+
+    deleteStaleItemsForTurn(database, turn.id, itemIds);
+  }
+
+  deleteStaleTurnsForThread(database, mergedSession.thread.id, turnIds);
+}
+
+function pruneEmptyProjects(database) {
+  database.exec(`
+    DELETE FROM projects
+    WHERE id NOT IN (
+      SELECT DISTINCT project_id
+      FROM threads
+      WHERE project_id IS NOT NULL
+    )
+  `);
+}
+
 function startSyncRun(database, sourceName, startedAt) {
   const result = database
     .prepare(`
@@ -1242,25 +1450,17 @@ function finishSyncRun(database, syncRunId, status, completedAt, details) {
 }
 
 function getImporterLayoutVersion(database) {
-  const row = database
-    .prepare("SELECT value FROM app_meta WHERE key = ?")
-    .get(IMPORTER_LAYOUT_VERSION_KEY);
+  const value = getImporterMetaValue(database, IMPORTER_LAYOUT_VERSION_KEY);
 
-  if (!row?.value) {
+  if (!value) {
     return 0;
   }
 
-  return Number.parseInt(row.value, 10) || 0;
+  return Number.parseInt(value, 10) || 0;
 }
 
 function setImporterLayoutVersion(database, version) {
-  database
-    .prepare(`
-      INSERT INTO app_meta (key, value)
-      VALUES (?, ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value
-    `)
-    .run(IMPORTER_LAYOUT_VERSION_KEY, String(version));
+  setImporterMetaValue(database, IMPORTER_LAYOUT_VERSION_KEY, String(version));
 }
 
 function resetImportedLibrary(database) {
@@ -1269,6 +1469,7 @@ function resetImportedLibrary(database) {
   try {
     database.exec(`
       DELETE FROM sync_runs;
+      DELETE FROM session_source_files;
       DELETE FROM threads;
       DELETE FROM projects;
     `);
@@ -1290,9 +1491,33 @@ function importCodexSessions(database, options = {}) {
 
   const startedAt = new Date().toISOString();
   const syncRunId = startSyncRun(database, "codex_sessions", startedAt);
+  const sessionIndexSignature = getOptionalFileSignature(getSessionIndexPath(codexHome));
+  const globalStateSignature = getOptionalFileSignature(getGlobalStatePath(codexHome));
+  const previousSessionIndexSignature = getImporterMetaValue(
+    database,
+    SESSION_INDEX_SIGNATURE_KEY
+  );
+  const previousGlobalStateSignature = getImporterMetaValue(
+    database,
+    GLOBAL_STATE_SIGNATURE_KEY
+  );
   const sessionIndex = loadSessionIndex(codexHome);
   const codexStateIndex = loadCodexStateIndex(codexHome);
   const files = discoverSessionFiles(sessionsRoot);
+  const currentSourceFiles = new Map(
+    files.map((filePath) => [filePath, createSourceFileSnapshot(filePath)])
+  );
+  const trackedSourceFiles = listTrackedSourceFiles(database);
+  const forceReparseAllFiles =
+    trackedSourceFiles.size > 0 &&
+    (sessionIndexSignature !== previousSessionIndexSignature ||
+      globalStateSignature !== previousGlobalStateSignature);
+  const bootstrapMissingSourceFiles =
+    trackedSourceFiles.size === 0
+      ? listExistingThreadSourceFiles(database).filter(
+          (sourceFile) => !currentSourceFiles.has(sourceFile.sourcePath)
+        )
+      : [];
 
   const result = {
     syncRunId,
@@ -1306,63 +1531,236 @@ function importCodexSessions(database, options = {}) {
     importedItems: 0,
     importedProjects: 0,
     skippedFiles: 0,
+    newFiles: 0,
+    changedFiles: 0,
+    unchangedFiles: 0,
+    missingFiles: 0,
+    errorFiles: 0,
+    reparsedFiles: 0,
     rebuiltLibrary: needsFullRebuild,
+    forcedFileReparse: forceReparseAllFiles,
     errors: []
   };
 
   try {
-    const parsedSessionsByThreadId = new Map();
+    const parseQueue = new Set();
+    const attemptedParseFiles = new Set();
+    const parsedSessionsByFilePath = new Map();
+    const sourceFileUpdates = new Map();
+    const affectedThreadIds = new Set();
+    const blockedThreadIds = new Set();
 
-    for (const filePath of files) {
-      const parsed = parseSessionFile(filePath, sessionIndex, codexHome, codexStateIndex);
+    for (const [filePath, sourceFile] of currentSourceFiles) {
+      const trackedSourceFile = trackedSourceFiles.get(filePath);
 
-      if (!parsed.ok) {
-        result.skippedFiles += 1;
-        result.errors.push({
+      if (!trackedSourceFile) {
+        result.newFiles += 1;
+      } else if (hasTrackedSourceFileChanged(trackedSourceFile, sourceFile)) {
+        result.changedFiles += 1;
+      } else {
+        result.unchangedFiles += 1;
+      }
+
+      if (forceReparseAllFiles || hasTrackedSourceFileChanged(trackedSourceFile, sourceFile)) {
+        parseQueue.add(filePath);
+      }
+    }
+
+    for (const trackedSourceFile of trackedSourceFiles.values()) {
+      if (!currentSourceFiles.has(trackedSourceFile.sourcePath)) {
+        result.missingFiles += 1;
+
+        if (trackedSourceFile.threadId) {
+          affectedThreadIds.add(trackedSourceFile.threadId);
+        }
+      }
+    }
+
+    for (const sourceFile of bootstrapMissingSourceFiles) {
+      result.missingFiles += 1;
+      affectedThreadIds.add(sourceFile.threadId);
+    }
+
+    while (true) {
+      const pendingFiles = [...parseQueue].filter((filePath) => !attemptedParseFiles.has(filePath));
+
+      if (!pendingFiles.length) {
+        break;
+      }
+
+      for (const filePath of pendingFiles) {
+        attemptedParseFiles.add(filePath);
+
+        const sourceFile = currentSourceFiles.get(filePath);
+        const trackedSourceFile = trackedSourceFiles.get(filePath) ?? null;
+        const parsed = parseSessionFile(
           filePath,
-          reason: parsed.reason
+          sessionIndex,
+          codexHome,
+          codexStateIndex,
+          sourceFile
+        );
+
+        if (!parsed.ok) {
+          result.skippedFiles += 1;
+          result.errorFiles += 1;
+          result.errors.push({
+            filePath,
+            reason: parsed.reason
+          });
+
+          if (trackedSourceFile?.threadId) {
+            blockedThreadIds.add(trackedSourceFile.threadId);
+          }
+
+          sourceFileUpdates.set(filePath, {
+            sourcePath: filePath,
+            threadId: trackedSourceFile?.threadId ?? null,
+            fileSize: sourceFile.fileSize,
+            modifiedAtMs: sourceFile.modifiedAtMs,
+            modifiedAt: sourceFile.modifiedAt,
+            status: SOURCE_FILE_STATUS_ERROR,
+            lastError: parsed.reason
+          });
+          continue;
+        }
+
+        parsedSessionsByFilePath.set(filePath, parsed);
+        affectedThreadIds.add(parsed.thread.id);
+
+        if (trackedSourceFile?.threadId && trackedSourceFile.threadId !== parsed.thread.id) {
+          affectedThreadIds.add(trackedSourceFile.threadId);
+        }
+
+        sourceFileUpdates.set(filePath, {
+          sourcePath: filePath,
+          threadId: parsed.thread.id,
+          fileSize: sourceFile.fileSize,
+          modifiedAtMs: sourceFile.modifiedAtMs,
+          modifiedAt: sourceFile.modifiedAt,
+          status: SOURCE_FILE_STATUS_ACTIVE,
+          lastError: null
         });
+      }
+
+      if (forceReparseAllFiles) {
         continue;
       }
 
-      const groupedSessions = parsedSessionsByThreadId.get(parsed.thread.id) ?? [];
-      groupedSessions.push(parsed);
-      parsedSessionsByThreadId.set(parsed.thread.id, groupedSessions);
+      for (const [filePath] of currentSourceFiles) {
+        if (attemptedParseFiles.has(filePath)) {
+          continue;
+        }
+
+        const knownThreadId =
+          parsedSessionsByFilePath.get(filePath)?.thread.id ??
+          trackedSourceFiles.get(filePath)?.threadId ??
+          null;
+
+        if (knownThreadId && affectedThreadIds.has(knownThreadId)) {
+          parseQueue.add(filePath);
+        }
+      }
+    }
+
+    result.reparsedFiles = attemptedParseFiles.size;
+
+    const parsedSessionsByThreadId = new Map();
+
+    for (const parsedSession of parsedSessionsByFilePath.values()) {
+      const groupedSessions = parsedSessionsByThreadId.get(parsedSession.thread.id) ?? [];
+      groupedSessions.push(parsedSession);
+      parsedSessionsByThreadId.set(parsedSession.thread.id, groupedSessions);
     }
 
     database.exec("BEGIN");
     const importedProjectIds = new Set();
 
-    for (const parsedSessions of parsedSessionsByThreadId.values()) {
+    for (const trackedSourceFile of trackedSourceFiles.values()) {
+      if (currentSourceFiles.has(trackedSourceFile.sourcePath)) {
+        continue;
+      }
+
+      upsertTrackedSourceFile(
+        database,
+        {
+          sourcePath: trackedSourceFile.sourcePath,
+          threadId: trackedSourceFile.threadId,
+          fileSize: trackedSourceFile.fileSize,
+          modifiedAtMs: trackedSourceFile.modifiedAtMs,
+          modifiedAt: trackedSourceFile.modifiedAt,
+          status: SOURCE_FILE_STATUS_MISSING,
+          lastError: null
+        },
+        startedAt
+      );
+    }
+
+    for (const sourceFile of bootstrapMissingSourceFiles) {
+      upsertTrackedSourceFile(
+        database,
+        {
+          sourcePath: sourceFile.sourcePath,
+          threadId: sourceFile.threadId,
+          fileSize: 0,
+          modifiedAtMs: 0,
+          modifiedAt: null,
+          status: SOURCE_FILE_STATUS_MISSING,
+          lastError: null
+        },
+        startedAt
+      );
+    }
+
+    for (const [filePath, sourceFile] of currentSourceFiles) {
+      const nextSourceFile = sourceFileUpdates.get(filePath) ?? {
+        sourcePath: filePath,
+        threadId: trackedSourceFiles.get(filePath)?.threadId ?? null,
+        fileSize: sourceFile.fileSize,
+        modifiedAtMs: sourceFile.modifiedAtMs,
+        modifiedAt: sourceFile.modifiedAt,
+        status: SOURCE_FILE_STATUS_ACTIVE,
+        lastError: null
+      };
+
+      upsertTrackedSourceFile(database, nextSourceFile, startedAt);
+    }
+
+    for (const [threadId, parsedSessions] of parsedSessionsByThreadId) {
+      if (blockedThreadIds.has(threadId)) {
+        continue;
+      }
+
       const mergedSession = mergeThreadSnapshots(parsedSessions);
-      upsertProject(database, mergedSession.project, startedAt);
 
       if (!importedProjectIds.has(mergedSession.project.projectId)) {
         importedProjectIds.add(mergedSession.project.projectId);
         result.importedProjects += 1;
       }
 
-      upsertThread(database, mergedSession.thread);
+      reconcileThreadSnapshot(database, mergedSession, startedAt);
       result.importedThreads += 1;
-
-      for (const turn of mergedSession.turns) {
-        upsertTurn(database, turn);
-        result.importedTurns += 1;
-
-        for (const item of turn.items) {
-          upsertItem(database, item);
-          result.importedItems += 1;
-        }
-      }
+      result.importedTurns += mergedSession.turns.length;
+      result.importedItems += mergedSession.turns.reduce(
+        (count, turn) => count + turn.items.length,
+        0
+      );
     }
 
+    pruneEmptyProjects(database);
     database.exec("COMMIT");
     setImporterLayoutVersion(database, IMPORTER_LAYOUT_VERSION);
+    setImporterMetaValue(database, SESSION_INDEX_SIGNATURE_KEY, sessionIndexSignature);
+    setImporterMetaValue(database, GLOBAL_STATE_SIGNATURE_KEY, globalStateSignature);
     result.completedAt = new Date().toISOString();
     finishSyncRun(database, syncRunId, "completed", result.completedAt, result);
     return result;
   } catch (error) {
-    database.exec("ROLLBACK");
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // Ignore rollback errors when no import transaction is active.
+    }
     result.completedAt = new Date().toISOString();
     result.errors.push({
       filePath: null,
