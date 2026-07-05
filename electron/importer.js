@@ -164,6 +164,19 @@ function buildValidationSummary(validationState) {
   };
 }
 
+function listValidationLogEntries(validationState) {
+  return [
+    ...validationState.warnings.map((entry) => ({
+      ...entry,
+      severity: "warning"
+    })),
+    ...validationState.errors.map((entry) => ({
+      ...entry,
+      severity: "error"
+    }))
+  ];
+}
+
 function getDefaultCodexHome() {
   return path.join(os.homedir(), ".codex");
 }
@@ -2051,6 +2064,41 @@ function finishSyncRun(database, syncRunId, status, completedAt, details) {
     .run(status, completedAt, JSON.stringify(details), syncRunId);
 }
 
+function persistValidationLogs(database, syncRunId, validationState, createdAt) {
+  const logEntries = listValidationLogEntries(validationState);
+
+  if (!logEntries.length) {
+    return;
+  }
+
+  const insertLogStatement = database.prepare(`
+    INSERT INTO import_validation_logs (
+      sync_run_id,
+      severity,
+      scope,
+      file_path,
+      code,
+      message,
+      line_number,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const entry of logEntries) {
+    insertLogStatement.run(
+      syncRunId,
+      entry.severity,
+      entry.scope,
+      entry.filePath ?? null,
+      entry.code,
+      entry.message,
+      entry.lineNumber ?? null,
+      createdAt
+    );
+  }
+}
+
 function getImporterLayoutVersion(database) {
   const value = getImporterMetaValue(database, IMPORTER_LAYOUT_VERSION_KEY);
 
@@ -2366,6 +2414,7 @@ function importCodexSessions(database, options = {}) {
     result.warnings = validationState.warnings;
     result.validationSummary = buildValidationSummary(validationState);
     result.completedAt = new Date().toISOString();
+    persistValidationLogs(database, syncRunId, validationState, result.completedAt);
     finishSyncRun(database, syncRunId, "completed", result.completedAt, result);
     return result;
   } catch (error) {
@@ -2382,6 +2431,7 @@ function importCodexSessions(database, options = {}) {
       filePath: null,
       reason: error instanceof Error ? error.message : String(error)
     });
+    persistValidationLogs(database, syncRunId, validationState, result.completedAt);
     finishSyncRun(database, syncRunId, "failed", result.completedAt, result);
     throw error;
   }
