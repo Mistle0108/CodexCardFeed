@@ -101,6 +101,8 @@ type ThreadListItem = {
   projectId: string;
   projectDisplayName: string | null;
   title: string;
+  tags: string[];
+  notes: string;
   sourceTitle: string;
   preview: string;
   sourceCwd: string | null;
@@ -115,6 +117,8 @@ type ThreadListItem = {
 type LocalOverrideInput = {
   displayTitle?: string | null;
   isPinned?: boolean;
+  tags?: string[] | null;
+  notes?: string | null;
 };
 
 type TurnListItem = {
@@ -122,6 +126,8 @@ type TurnListItem = {
   threadId: string;
   ordinal: number;
   displayTitle: string | null;
+  tags: string[];
+  notes: string;
   firstUserSnippet: string;
   firstAssistantSnippet: string;
   status: string;
