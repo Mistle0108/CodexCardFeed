@@ -1,5 +1,32 @@
+const {
+  compareAndStoreSnapshot,
+  stableStringify
+} = require("./diagnostic-snapshots");
+
+const INTEGRITY_SNAPSHOT_KEY = "diagnostic_snapshot.integrity_check";
+
 function runQuery(database, sql, ...params) {
   return database.prepare(sql).all(...params);
+}
+
+function createSampleRef(label, options = {}) {
+  return {
+    label,
+    isNew: false,
+    threadId: options.threadId ?? null,
+    turnId: options.turnId ?? null
+  };
+}
+
+function createThreadSampleRef(threadId, label = threadId) {
+  return createSampleRef(label, { threadId });
+}
+
+function createTurnSampleRef(row, label = row.id) {
+  return createSampleRef(label, {
+    threadId: row.thread_id ?? null,
+    turnId: row.id ?? null
+  });
 }
 
 function createCheckResult({
@@ -9,6 +36,9 @@ function createCheckResult({
   severity,
   affectedCount,
   sampleRefs,
+  issueDetails = [],
+  issueRefs = [],
+  newAffectedCount = 0,
   passMessage,
   failMessage
 }) {
@@ -21,24 +51,32 @@ function createCheckResult({
     severity,
     status: hasIssues ? "fail" : "pass",
     affectedCount,
+    newAffectedCount,
     sampleRefs: hasIssues ? sampleRefs : [],
+    issueDetails,
+    issueRefs,
     message: hasIssues ? failMessage(affectedCount) : passMessage
   };
 }
 
 function createQueryCheck(database, definition) {
   const rows = runQuery(database, definition.sql, ...(definition.params ?? []));
-  const sampleRefs = rows
-    .slice(0, definition.sampleLimit ?? 5)
-    .map((row) => definition.mapSampleRef(row));
+  const issueDetails = rows.map((row) => ({
+    issueRef: definition.mapIssueRef ? definition.mapIssueRef(row) : stableStringify(row),
+    sampleRef: definition.mapSampleRef(row)
+  }));
 
   return createCheckResult({
     key: definition.key,
     label: definition.label,
     description: definition.description,
     severity: definition.severity,
-    affectedCount: rows.length,
-    sampleRefs,
+    affectedCount: issueDetails.length,
+    issueDetails,
+    issueRefs: issueDetails.map((detail) => detail.issueRef),
+    sampleRefs: issueDetails
+      .slice(0, definition.sampleLimit ?? 5)
+      .map((detail) => detail.sampleRef),
     passMessage: definition.passMessage,
     failMessage: definition.failMessage
   });
@@ -56,6 +94,8 @@ function createOrdinalContinuityCheck({
   let expectedOrdinal = 1;
   let affectedCount = 0;
   const sampleRefs = [];
+  const issueDetails = [];
+  const issueRefs = [];
 
   for (const row of rows) {
     const parentId = row[parentKey];
@@ -68,11 +108,16 @@ function createOrdinalContinuityCheck({
 
     if (ordinal !== expectedOrdinal) {
       affectedCount += 1;
+      const issueRef = `${parentId}:${expectedOrdinal}:${ordinal}`;
+      const sampleRef = createThreadSampleRef(
+        parentId,
+        `${parentId}: expected ${expectedOrdinal}, found ${ordinal}`
+      );
+      issueRefs.push(issueRef);
+      issueDetails.push({ issueRef, sampleRef });
 
       if (sampleRefs.length < 5) {
-        sampleRefs.push(
-          `${parentId}: expected ${expectedOrdinal}, found ${ordinal}`
-        );
+        sampleRefs.push(sampleRef);
       }
 
       expectedOrdinal = ordinal + 1;
@@ -88,6 +133,8 @@ function createOrdinalContinuityCheck({
     description,
     severity: "warning",
     affectedCount,
+    issueDetails,
+    issueRefs,
     sampleRefs,
     passMessage: "Ordinals are contiguous.",
     failMessage(count) {
@@ -112,7 +159,7 @@ function buildIntegrityChecks(database) {
           AND projects.id IS NULL
       `,
       mapSampleRef(row) {
-        return `${row.id} -> ${row.project_id}`;
+        return createThreadSampleRef(row.id, `${row.id} -> ${row.project_id}`);
       },
       passMessage: "All thread-to-project references are valid.",
       failMessage(count) {
@@ -132,7 +179,7 @@ function buildIntegrityChecks(database) {
         WHERE threads.id IS NULL
       `,
       mapSampleRef(row) {
-        return `${row.id} -> ${row.thread_id}`;
+        return createSampleRef(`${row.id} -> ${row.thread_id}`);
       },
       passMessage: "All turn-to-thread references are valid.",
       failMessage(count) {
@@ -152,7 +199,7 @@ function buildIntegrityChecks(database) {
         WHERE turns.id IS NULL
       `,
       mapSampleRef(row) {
-        return `${row.id} -> ${row.turn_id}`;
+        return createSampleRef(`${row.id} -> ${row.turn_id}`);
       },
       passMessage: "All item-to-turn references are valid.",
       failMessage(count) {
@@ -172,7 +219,7 @@ function buildIntegrityChecks(database) {
         WHERE threads.id IS NULL
       `,
       mapSampleRef(row) {
-        return row.thread_id;
+        return createSampleRef(row.thread_id);
       },
       passMessage: "All thread overrides are attached to threads.",
       failMessage(count) {
@@ -192,7 +239,7 @@ function buildIntegrityChecks(database) {
         WHERE turns.id IS NULL
       `,
       mapSampleRef(row) {
-        return row.turn_id;
+        return createSampleRef(row.turn_id);
       },
       passMessage: "All turn overrides are attached to turns.",
       failMessage(count) {
@@ -212,7 +259,7 @@ function buildIntegrityChecks(database) {
         WHERE turns.id IS NULL
       `,
       mapSampleRef(row) {
-        return row.turn_id;
+        return createSampleRef(row.turn_id);
       },
       passMessage: "All stored turn summaries are attached to turns.",
       failMessage(count) {
@@ -233,7 +280,7 @@ function buildIntegrityChecks(database) {
           AND threads.id IS NULL
       `,
       mapSampleRef(row) {
-        return `${row.thread_id} -> ${row.source_path}`;
+        return createSampleRef(`${row.thread_id} -> ${row.source_path}`);
       },
       passMessage: "Tracked source file rows are attached to existing threads.",
       failMessage(count) {
@@ -253,7 +300,7 @@ function buildIntegrityChecks(database) {
         WHERE sync_runs.id IS NULL
       `,
       mapSampleRef(row) {
-        return `${row.id} -> ${row.sync_run_id}`;
+        return createSampleRef(`${row.id} -> ${row.sync_run_id}`);
       },
       passMessage: "All validation logs are attached to sync runs.",
       failMessage(count) {
@@ -274,7 +321,7 @@ function buildIntegrityChecks(database) {
         HAVING COUNT(turns.id) = 0
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createThreadSampleRef(row.id);
       },
       passMessage: "All threads contain at least one turn.",
       failMessage(count) {
@@ -287,15 +334,15 @@ function buildIntegrityChecks(database) {
       description: "Each turn should contain at least one stored item.",
       severity: "error",
       sql: `
-        SELECT turns.id
+        SELECT turns.id, turns.thread_id
         FROM turns
         LEFT JOIN items
           ON items.turn_id = turns.id
-        GROUP BY turns.id
+        GROUP BY turns.id, turns.thread_id
         HAVING COUNT(items.id) = 0
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All turns contain at least one stored item.",
       failMessage(count) {
@@ -308,7 +355,7 @@ function buildIntegrityChecks(database) {
       description: "Completed turns should keep at least one user message item.",
       severity: "warning",
       sql: `
-        SELECT turns.id
+        SELECT turns.id, turns.thread_id
         FROM turns
         WHERE turns.status = 'completed'
           AND NOT EXISTS (
@@ -321,7 +368,7 @@ function buildIntegrityChecks(database) {
           )
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All completed turns contain a stored user message.",
       failMessage(count) {
@@ -334,7 +381,7 @@ function buildIntegrityChecks(database) {
       description: "Completed turns should keep at least one assistant answer message.",
       severity: "warning",
       sql: `
-        SELECT turns.id
+        SELECT turns.id, turns.thread_id
         FROM turns
         WHERE turns.status = 'completed'
           AND NOT EXISTS (
@@ -347,7 +394,7 @@ function buildIntegrityChecks(database) {
           )
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All completed turns contain a stored assistant answer.",
       failMessage(count) {
@@ -360,7 +407,7 @@ function buildIntegrityChecks(database) {
       description: "Turn token counters should never be negative.",
       severity: "error",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE input_tokens < 0
           OR cached_input_tokens < 0
@@ -370,7 +417,7 @@ function buildIntegrityChecks(database) {
           OR token_event_count < 0
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All token counters are non-negative.",
       failMessage(count) {
@@ -383,12 +430,12 @@ function buildIntegrityChecks(database) {
       description: "cached_input_tokens should be a subset of input_tokens.",
       severity: "error",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE cached_input_tokens > input_tokens
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All cached token counts are within input token counts.",
       failMessage(count) {
@@ -401,7 +448,7 @@ function buildIntegrityChecks(database) {
       description: "total_tokens should not be lower than the stored token components.",
       severity: "warning",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE total_tokens < input_tokens
           OR total_tokens < output_tokens
@@ -409,7 +456,7 @@ function buildIntegrityChecks(database) {
           OR total_tokens < reasoning_output_tokens
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All total token counts are at least as large as stored components.",
       failMessage(count) {
@@ -422,7 +469,7 @@ function buildIntegrityChecks(database) {
       description: "Non-zero token totals should usually have at least one token event.",
       severity: "warning",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE token_event_count = 0
           AND (
@@ -434,7 +481,7 @@ function buildIntegrityChecks(database) {
           )
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All non-zero token totals have token events.",
       failMessage(count) {
@@ -447,14 +494,14 @@ function buildIntegrityChecks(database) {
       description: "completed_at should not be earlier than started_at.",
       severity: "error",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE started_at IS NOT NULL
           AND completed_at IS NOT NULL
           AND completed_at < started_at
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All turn timestamps keep completed_at after started_at.",
       failMessage(count) {
@@ -467,7 +514,7 @@ function buildIntegrityChecks(database) {
       description: "last_seen_at should not be earlier than the turn start or completion time.",
       severity: "warning",
       sql: `
-        SELECT id
+        SELECT id, thread_id
         FROM turns
         WHERE last_seen_at IS NOT NULL
           AND (
@@ -476,7 +523,7 @@ function buildIntegrityChecks(database) {
           )
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createTurnSampleRef(row);
       },
       passMessage: "All turn last-seen timestamps are aligned with activity timestamps.",
       failMessage(count) {
@@ -498,7 +545,7 @@ function buildIntegrityChecks(database) {
           )
       `,
       mapSampleRef(row) {
-        return row.id;
+        return createThreadSampleRef(row.id);
       },
       passMessage: "All thread last-seen timestamps are aligned with activity timestamps.",
       failMessage(count) {
@@ -550,7 +597,41 @@ function buildIntegrityChecks(database) {
 
 function runIntegrityCheck(database) {
   const checks = buildIntegrityChecks(database);
-  const failedChecks = checks.filter((check) => check.status === "fail");
+  const snapshotResult = compareAndStoreSnapshot(
+    database,
+    INTEGRITY_SNAPSHOT_KEY,
+    Object.fromEntries(checks.map((check) => [check.key, check.issueRefs]))
+  );
+  const checksWithNewCounts = checks.map((check) => {
+    const newIssueRefs = snapshotResult.hasBaseline
+      ? new Set(snapshotResult.newRefs[check.key] ?? [])
+      : new Set();
+    const newAffectedCount = snapshotResult.hasBaseline
+      ? snapshotResult.newCounts[check.key] ?? 0
+      : 0;
+    const sampleRefs =
+      newAffectedCount > 0
+        ? check.issueDetails
+            .filter((detail) => newIssueRefs.has(detail.issueRef))
+            .map((detail) => ({
+              ...detail.sampleRef,
+              isNew: true
+            }))
+        : check.sampleRefs;
+
+    return {
+      key: check.key,
+      label: check.label,
+      description: check.description,
+      severity: check.severity,
+      status: check.status,
+      affectedCount: check.affectedCount,
+      newAffectedCount,
+      sampleRefs,
+      message: check.message
+    };
+  });
+  const failedChecks = checksWithNewCounts.filter((check) => check.status === "fail");
   const errorCount = failedChecks.filter((check) => check.severity === "error").length;
   const warningCount = failedChecks.filter((check) => check.severity === "warning").length;
 
@@ -560,10 +641,11 @@ function runIntegrityCheck(database) {
       totalChecks: checks.length,
       passedChecks: checks.length - failedChecks.length,
       failedChecks: failedChecks.length,
+      newIssueCount: snapshotResult.hasBaseline ? snapshotResult.totalNewCount : 0,
       errorCount,
       warningCount
     },
-    checks
+    checks: checksWithNewCounts
   };
 }
 

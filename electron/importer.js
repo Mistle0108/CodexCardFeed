@@ -2,11 +2,13 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { compareAndStoreSnapshot, stableStringify } = require("./diagnostic-snapshots");
 
 const IMPORTER_LAYOUT_VERSION = 3;
 const IMPORTER_LAYOUT_VERSION_KEY = "codex_card_feed_importer_layout_version";
 const SESSION_INDEX_SIGNATURE_KEY = "codex_card_feed_session_index_signature";
 const GLOBAL_STATE_SIGNATURE_KEY = "codex_card_feed_global_state_signature";
+const SESSION_DIAGNOSIS_SNAPSHOT_KEY = "diagnostic_snapshot.session_diagnosis";
 const SOURCE_FILE_STATUS_ACTIVE = "active";
 const SOURCE_FILE_STATUS_MISSING = "missing";
 const SOURCE_FILE_STATUS_ERROR = "error";
@@ -2437,8 +2439,392 @@ function importCodexSessions(database, options = {}) {
   }
 }
 
+function listThreadSourceRecords(database) {
+  return database
+    .prepare(`
+      SELECT
+        id,
+        title,
+        source_session_path
+      FROM threads
+    `)
+    .all()
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      sourceSessionPath: row.source_session_path ?? null
+    }));
+}
+
+function createDiagnosisIssue({
+  code,
+  category,
+  severity,
+  title,
+  message,
+  sourcePath = null,
+  parsedThreadId = null,
+  trackedThreadId = null,
+  trackedStatus = null,
+  relatedSourcePaths = [],
+  relatedThreadIds = [],
+  suggestedAction = "inspect",
+  lastImportedAt = null,
+  lastError = null
+}) {
+  return {
+    code,
+    category,
+    severity,
+    title,
+    message,
+    sourcePath,
+    parsedThreadId,
+    trackedThreadId,
+    trackedStatus,
+    relatedSourcePaths,
+    relatedThreadIds,
+    suggestedAction,
+    lastImportedAt,
+    lastError
+  };
+}
+
+function createDiagnosisIssueRef(issue) {
+  return stableStringify({
+    code: issue.code,
+    category: issue.category,
+    sourcePath: issue.sourcePath,
+    parsedThreadId: issue.parsedThreadId,
+    trackedThreadId: issue.trackedThreadId,
+    trackedStatus: issue.trackedStatus,
+    relatedSourcePaths: [...issue.relatedSourcePaths].sort(),
+    relatedThreadIds: [...issue.relatedThreadIds].sort()
+  });
+}
+
+function buildSessionDiagnosisSummary(report, counts, snapshotResult) {
+  return {
+    scannedFiles: counts.scannedFiles,
+    trackedFiles: counts.trackedFiles,
+    dbThreads: counts.dbThreads,
+    duplicateCount: report.duplicates.length,
+    newDuplicateCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.duplicates ?? 0
+      : 0,
+    importGapCount: report.importGaps.length,
+    newImportGapCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.importGaps ?? 0
+      : 0,
+    sourceProblemCount: report.sourceProblems.length,
+    newSourceProblemCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.sourceProblems ?? 0
+      : 0,
+    parseProblemCount: report.parseProblems.length,
+    newParseProblemCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.parseProblems ?? 0
+      : 0,
+    totalIssueCount:
+      report.duplicates.length +
+      report.importGaps.length +
+      report.sourceProblems.length +
+      report.parseProblems.length,
+    newTotalIssueCount: snapshotResult?.hasBaseline ? snapshotResult.totalNewCount : 0
+  };
+}
+
+function runSessionDiagnosis(database, options = {}) {
+  const codexHome = options.codexHome ?? getDefaultCodexHome();
+  const sessionsRoot = getSessionsRoot(codexHome);
+  const checkedAt = new Date().toISOString();
+  const validationState = createValidationState();
+  const sessionIndex = loadSessionIndex(codexHome, validationState);
+  const codexStateIndex = loadCodexStateIndex(codexHome, {
+    validationState,
+    strict: false
+  });
+  const files = discoverSessionFiles(sessionsRoot);
+  const currentSourceFiles = new Map(
+    files.map((filePath) => [filePath, createSourceFileSnapshot(filePath)])
+  );
+  const trackedSourceFiles = listTrackedSourceFiles(database);
+  const threadRows = listThreadSourceRecords(database);
+  const threadsById = new Map(threadRows.map((thread) => [thread.id, thread]));
+  const report = {
+    checkedAt,
+    codexHome,
+    sessionsRoot,
+    summary: {
+      scannedFiles: files.length,
+      trackedFiles: trackedSourceFiles.size,
+      dbThreads: threadRows.length,
+      duplicateCount: 0,
+      importGapCount: 0,
+      sourceProblemCount: 0,
+      parseProblemCount: 0,
+      totalIssueCount: 0
+    },
+    duplicates: [],
+    importGaps: [],
+    sourceProblems: [],
+    parseProblems: []
+  };
+
+  const threadIdsBySourceSessionPath = new Map();
+
+  for (const thread of threadRows) {
+    if (!thread.sourceSessionPath) {
+      continue;
+    }
+
+    const threadIds = threadIdsBySourceSessionPath.get(thread.sourceSessionPath) ?? [];
+    threadIds.push(thread.id);
+    threadIdsBySourceSessionPath.set(thread.sourceSessionPath, threadIds);
+  }
+
+  for (const [sourcePath, threadIds] of threadIdsBySourceSessionPath) {
+    if (threadIds.length < 2) {
+      continue;
+    }
+
+    report.duplicates.push(
+      createDiagnosisIssue({
+        code: "duplicate_source_session_path",
+        category: "duplicate",
+        severity: "error",
+        title: "Multiple DB threads share one source session path",
+        message: `The same stored source session path is attached to ${threadIds.length} threads.`,
+        sourcePath,
+        relatedThreadIds: threadIds,
+        suggestedAction: "inspect_db"
+      })
+    );
+  }
+
+  for (const [filePath, sourceFileSnapshot] of currentSourceFiles) {
+    const trackedSourceFile = trackedSourceFiles.get(filePath) ?? null;
+    const parsed = parseSessionFile(
+      filePath,
+      sessionIndex,
+      codexHome,
+      codexStateIndex,
+      sourceFileSnapshot,
+      validationState
+    );
+
+    if (!parsed.ok) {
+      report.parseProblems.push(
+        createDiagnosisIssue({
+          code: parsed.code ?? "session_file_parse_failed",
+          category: "parse_problem",
+          severity: "warning",
+          title: "Current source file could not be parsed",
+          message: parsed.reason,
+          sourcePath: filePath,
+          trackedThreadId: trackedSourceFile?.threadId ?? null,
+          trackedStatus: trackedSourceFile?.status ?? null,
+          suggestedAction: "inspect_source",
+          lastImportedAt: trackedSourceFile?.lastImportedAt ?? null,
+          lastError: trackedSourceFile?.lastError ?? null
+        })
+      );
+      continue;
+    }
+
+    const parsedThreadId = parsed.thread.id;
+
+    if (!trackedSourceFile) {
+      report.importGaps.push(
+        createDiagnosisIssue({
+          code: "untracked_source_file",
+          category: "import_gap",
+          severity: "warning",
+          title: "Current source file is not tracked in the DB",
+          message: "This session file exists in Codex source but has not been recorded in session_source_files yet.",
+          sourcePath: filePath,
+          parsedThreadId,
+          suggestedAction: "reimport"
+        })
+      );
+      continue;
+    }
+
+    if (trackedSourceFile.status === SOURCE_FILE_STATUS_ERROR) {
+      report.sourceProblems.push(
+        createDiagnosisIssue({
+          code: "tracked_source_status_error",
+          category: "source_problem",
+          severity: "warning",
+          title: "Tracked source file is marked as error",
+          message: "The most recent import marked this source file as an error.",
+          sourcePath: filePath,
+          parsedThreadId,
+          trackedThreadId: trackedSourceFile.threadId,
+          trackedStatus: trackedSourceFile.status,
+          suggestedAction: "reimport",
+          lastImportedAt: trackedSourceFile.lastImportedAt,
+          lastError: trackedSourceFile.lastError
+        })
+      );
+    }
+
+    if (!trackedSourceFile.threadId) {
+      report.importGaps.push(
+        createDiagnosisIssue({
+          code: "tracked_source_missing_thread_id",
+          category: "import_gap",
+          severity: "error",
+          title: "Tracked source file has no linked DB thread",
+          message: "The source file is tracked, but no thread_id is stored for it.",
+          sourcePath: filePath,
+          parsedThreadId,
+          trackedStatus: trackedSourceFile.status,
+          suggestedAction: "reimport",
+          lastImportedAt: trackedSourceFile.lastImportedAt,
+          lastError: trackedSourceFile.lastError
+        })
+      );
+      continue;
+    }
+
+    if (trackedSourceFile.threadId !== parsedThreadId) {
+      report.importGaps.push(
+        createDiagnosisIssue({
+          code: "tracked_source_thread_id_mismatch",
+          category: "import_gap",
+          severity: "error",
+          title: "Tracked source file points to a different thread than the source content",
+          message: "The parsed session id from the current source file does not match the tracked thread_id in the DB.",
+          sourcePath: filePath,
+          parsedThreadId,
+          trackedThreadId: trackedSourceFile.threadId,
+          trackedStatus: trackedSourceFile.status,
+          suggestedAction: "reimport",
+          lastImportedAt: trackedSourceFile.lastImportedAt,
+          lastError: trackedSourceFile.lastError
+        })
+      );
+      continue;
+    }
+
+    if (!threadsById.has(parsedThreadId)) {
+      report.importGaps.push(
+        createDiagnosisIssue({
+          code: "parsed_source_missing_db_thread",
+          category: "import_gap",
+          severity: "error",
+          title: "Current source file resolves to a thread missing from the DB",
+          message: "The source file parses successfully, but the matching DB thread row does not exist.",
+          sourcePath: filePath,
+          parsedThreadId,
+          trackedThreadId: trackedSourceFile.threadId,
+          trackedStatus: trackedSourceFile.status,
+          suggestedAction: "reimport",
+          lastImportedAt: trackedSourceFile.lastImportedAt,
+          lastError: trackedSourceFile.lastError
+        })
+      );
+    }
+  }
+
+  for (const trackedSourceFile of trackedSourceFiles.values()) {
+    if (currentSourceFiles.has(trackedSourceFile.sourcePath)) {
+      continue;
+    }
+
+    if (trackedSourceFile.status === SOURCE_FILE_STATUS_MISSING) {
+      report.sourceProblems.push(
+        createDiagnosisIssue({
+          code: "tracked_source_missing_on_disk",
+          category: "source_problem",
+          severity: "warning",
+          title: "Tracked source file is missing from the current Codex source",
+          message: "The DB still tracks this source file, but it is not present under the current Codex sessions directory.",
+          sourcePath: trackedSourceFile.sourcePath,
+          trackedThreadId: trackedSourceFile.threadId,
+          trackedStatus: trackedSourceFile.status,
+          suggestedAction: "restore_source",
+          lastImportedAt: trackedSourceFile.lastImportedAt,
+          lastError: trackedSourceFile.lastError
+        })
+      );
+      continue;
+    }
+
+    report.sourceProblems.push(
+      createDiagnosisIssue({
+        code: "tracked_source_not_found_in_current_scan",
+        category: "source_problem",
+        severity: "warning",
+        title: "Tracked source file was not found in the current source scan",
+        message: "The file is tracked in the DB, but it was not discovered in the current Codex sessions directory scan.",
+        sourcePath: trackedSourceFile.sourcePath,
+        trackedThreadId: trackedSourceFile.threadId,
+        trackedStatus: trackedSourceFile.status,
+        suggestedAction: "inspect_source",
+        lastImportedAt: trackedSourceFile.lastImportedAt,
+        lastError: trackedSourceFile.lastError
+      })
+    );
+  }
+
+  for (const trackedSourceFile of trackedSourceFiles.values()) {
+    if (currentSourceFiles.has(trackedSourceFile.sourcePath)) {
+      continue;
+    }
+
+    if (!trackedSourceFile.threadId) {
+      continue;
+    }
+
+    if (threadsById.has(trackedSourceFile.threadId)) {
+      continue;
+    }
+
+    report.importGaps.push(
+      createDiagnosisIssue({
+        code: "tracked_thread_missing_db_row",
+        category: "import_gap",
+        severity: "error",
+        title: "Tracked source file references a missing DB thread",
+        message: "session_source_files.thread_id points to a thread row that is no longer present in the DB.",
+        sourcePath: trackedSourceFile.sourcePath,
+        trackedThreadId: trackedSourceFile.threadId,
+        trackedStatus: trackedSourceFile.status,
+        suggestedAction: "reimport",
+        lastImportedAt: trackedSourceFile.lastImportedAt,
+        lastError: trackedSourceFile.lastError
+      })
+    );
+  }
+
+  const snapshotResult = compareAndStoreSnapshot(
+    database,
+    SESSION_DIAGNOSIS_SNAPSHOT_KEY,
+    {
+      duplicates: report.duplicates.map((issue) => createDiagnosisIssueRef(issue)),
+      importGaps: report.importGaps.map((issue) => createDiagnosisIssueRef(issue)),
+      sourceProblems: report.sourceProblems.map((issue) => createDiagnosisIssueRef(issue)),
+      parseProblems: report.parseProblems.map((issue) => createDiagnosisIssueRef(issue))
+    }
+  );
+
+  report.summary = buildSessionDiagnosisSummary(
+    report,
+    {
+      scannedFiles: files.length,
+      trackedFiles: trackedSourceFiles.size,
+      dbThreads: threadRows.length
+    },
+    snapshotResult
+  );
+
+  return report;
+}
+
 module.exports = {
   getDefaultCodexHome,
   importCodexSessions,
+  runSessionDiagnosis,
   listSidebarWorkspaceRoots
 };

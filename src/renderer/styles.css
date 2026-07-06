@@ -131,6 +131,12 @@ select {
   gap: 8px;
 }
 
+.sidebar-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-kicker {
   margin: 0 0 6px;
   color: #766b60;
@@ -518,14 +524,6 @@ select {
   gap: 10px;
 }
 
-.panel-toolbar-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .panel-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -560,22 +558,6 @@ select {
 
 .panel-toolbar-meta {
   flex: 0 0 auto;
-}
-
-.integrity-toolbar-meta {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(44, 58, 78, 0.06);
-}
-
-.integrity-toolbar-meta.is-clean {
-  color: #1f7a43;
-  background: rgba(34, 197, 94, 0.12);
-}
-
-.integrity-toolbar-meta.has-issues {
-  color: #a15e00;
-  background: rgba(245, 158, 11, 0.16);
 }
 
 .workspace-kicker {
@@ -790,6 +772,11 @@ select {
   padding: 5px 9px;
   background: rgba(44, 58, 78, 0.08);
   color: #223045;
+}
+
+.count-pill-new {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2d6cbe;
 }
 
 .status-pill {
@@ -1267,10 +1254,6 @@ select {
   margin-top: 0;
 }
 
-.integrity-modal {
-  width: min(980px, 100%);
-}
-
 .integrity-summary-panel,
 .integrity-section {
   padding: 12px;
@@ -1284,7 +1267,7 @@ select {
 .integrity-summary-grid {
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
@@ -1380,12 +1363,173 @@ select {
   line-height: 1.45;
 }
 
+.integrity-reference-block {
+  display: grid;
+  gap: 8px;
+}
+
+.integrity-reference-label {
+  margin: 0;
+}
+
 .integrity-sample-list li + li {
   margin-top: 4px;
 }
 
+.integrity-sample-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #2d6cbe;
+  font-size: inherit;
+  line-height: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(45, 108, 190, 0.3);
+  cursor: pointer;
+}
+
+.integrity-sample-link.is-new,
+.integrity-sample-text.is-new {
+  color: #1d548f;
+  font-weight: 700;
+}
+
+.integrity-sample-link:hover {
+  color: #1d548f;
+  text-decoration-color: rgba(29, 84, 143, 0.44);
+}
+
+.integrity-reference-toggle {
+  justify-self: start;
+}
+
 .integrity-empty-state {
   margin: 0;
+}
+
+.diagnostics-modal {
+  width: min(1040px, 100%);
+}
+
+.diagnosis-summary-panel,
+.diagnosis-section {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+  display: grid;
+  gap: 12px;
+}
+
+.diagnosis-summary-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.diagnosis-summary-grid div,
+.diagnosis-path-grid div {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(92, 71, 46, 0.06);
+}
+
+.diagnosis-summary-grid dt,
+.diagnosis-path-grid dt,
+.diagnosis-meta-grid dt {
+  margin-bottom: 4px;
+  color: #5f7695;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.diagnosis-summary-grid dd,
+.diagnosis-path-grid dd,
+.diagnosis-meta-grid dd {
+  margin: 0;
+  color: #223045;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.diagnosis-summary-grid dd {
+  font-size: 0.92rem;
+}
+
+.diagnosis-path-grid,
+.diagnosis-meta-grid {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.diagnosis-path-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnosis-meta-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnosis-meta-grid .is-stacked {
+  grid-column: 1 / -1;
+}
+
+.diagnosis-section-header,
+.diagnosis-issue-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.diagnosis-issue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diagnosis-issue-card {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(92, 71, 46, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
+.diagnosis-issue-card strong {
+  color: #223045;
+  font-size: 0.84rem;
+}
+
+.diagnosis-issue-message {
+  margin: 4px 0 0;
+  color: #5b6472;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.diagnosis-issue-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diagnosis-action-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(78, 98, 128, 0.12);
+  color: #425674;
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 .modal-overlay {
@@ -1460,7 +1604,10 @@ select {
 
   .detail-meta,
   .token-grid,
-  .integrity-summary-grid {
+  .integrity-summary-grid,
+  .diagnosis-summary-grid,
+  .diagnosis-path-grid,
+  .diagnosis-meta-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1471,8 +1618,9 @@ select {
   .question-card-meta,
   .turn-card-actions,
   .panel-toolbar,
-  .panel-toolbar-actions,
   .modal-header,
+  .diagnosis-section-header,
+  .diagnosis-issue-header,
   .integrity-section-header,
   .integrity-check-header,
   .sidebar-section-header,

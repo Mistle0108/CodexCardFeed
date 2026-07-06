@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   runIntegrityCheck() {
     return ipcRenderer.invoke("library:run-integrity-check");
   },
+  runSessionDiagnosis() {
+    return ipcRenderer.invoke("library:run-session-diagnosis");
+  },
   listProjects() {
     return ipcRenderer.invoke("library:list-projects");
   },

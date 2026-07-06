@@ -143,6 +143,13 @@ type TurnItem = {
   createdAt: string | null;
 };
 
+type IntegritySampleRef = {
+  label: string;
+  isNew: boolean;
+  threadId: string | null;
+  turnId: string | null;
+};
+
 type IntegrityCheckResult = {
   key: string;
   label: string;
@@ -150,7 +157,8 @@ type IntegrityCheckResult = {
   severity: "error" | "warning";
   status: "pass" | "fail";
   affectedCount: number;
-  sampleRefs: string[];
+  newAffectedCount: number;
+  sampleRefs: IntegritySampleRef[];
   message: string;
 };
 
@@ -160,10 +168,53 @@ type IntegrityReport = {
     totalChecks: number;
     passedChecks: number;
     failedChecks: number;
+    newIssueCount: number;
     errorCount: number;
     warningCount: number;
   };
   checks: IntegrityCheckResult[];
+};
+
+type SessionDiagnosisIssue = {
+  code: string;
+  category: "duplicate" | "import_gap" | "source_problem" | "parse_problem";
+  severity: "error" | "warning";
+  title: string;
+  message: string;
+  sourcePath: string | null;
+  parsedThreadId: string | null;
+  trackedThreadId: string | null;
+  trackedStatus: string | null;
+  relatedSourcePaths: string[];
+  relatedThreadIds: string[];
+  suggestedAction: "reimport" | "restore_source" | "inspect_mapping" | "inspect_db" | "inspect_source" | "inspect";
+  lastImportedAt: string | null;
+  lastError: string | null;
+};
+
+type SessionDiagnosisReport = {
+  checkedAt: string;
+  codexHome: string;
+  sessionsRoot: string;
+  summary: {
+    scannedFiles: number;
+    trackedFiles: number;
+    dbThreads: number;
+    duplicateCount: number;
+    newDuplicateCount: number;
+    importGapCount: number;
+    newImportGapCount: number;
+    sourceProblemCount: number;
+    newSourceProblemCount: number;
+    parseProblemCount: number;
+    newParseProblemCount: number;
+    totalIssueCount: number;
+    newTotalIssueCount: number;
+  };
+  duplicates: SessionDiagnosisIssue[];
+  importGaps: SessionDiagnosisIssue[];
+  sourceProblems: SessionDiagnosisIssue[];
+  parseProblems: SessionDiagnosisIssue[];
 };
 
 interface Window {
@@ -176,6 +227,7 @@ interface Window {
     updateDatabasePath(databasePath: string): Promise<ShellInfo>;
     resetDatabasePath(): Promise<ShellInfo>;
     runIntegrityCheck(): Promise<IntegrityReport>;
+    runSessionDiagnosis(): Promise<SessionDiagnosisReport>;
     listProjects(): Promise<ProjectListItem[]>;
     listThreads(projectId?: string | null): Promise<ThreadListItem[]>;
     listTurns(threadId: string): Promise<TurnListItem[]>;

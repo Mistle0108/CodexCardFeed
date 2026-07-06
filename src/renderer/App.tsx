@@ -29,8 +29,36 @@ function formatInteger(value: number) {
   return integerFormatter.format(value);
 }
 
+function formatTotalAndNewLabel(totalCount: number, newCount: number, singular: string) {
+  return `${formatCountLabel(totalCount, singular)} / ${formatCountLabel(newCount, `new ${singular}`)}`;
+}
+
 function formatTokenLabel(value: number) {
   return `${formatInteger(value)} tok`;
+}
+
+function formatSuggestedActionLabel(value: SessionDiagnosisIssue["suggestedAction"]) {
+  if (value === "reimport") {
+    return "Reimport";
+  }
+
+  if (value === "restore_source") {
+    return "Restore source";
+  }
+
+  if (value === "inspect_mapping") {
+    return "Inspect mapping";
+  }
+
+  if (value === "inspect_db") {
+    return "Inspect DB";
+  }
+
+  if (value === "inspect_source") {
+    return "Inspect source";
+  }
+
+  return "Inspect";
 }
 
 type DetailMetaEntry = {
@@ -525,12 +553,15 @@ export default function App() {
   const [turns, setTurns] = useState<TurnListItem[]>([]);
   const [turnItems, setTurnItems] = useState<TurnItem[]>([]);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const [sessionDiagnosisReport, setSessionDiagnosisReport] =
+    useState<SessionDiagnosisReport | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [isTurnModalOpen, setIsTurnModalOpen] = useState(false);
-  const [isIntegrityModalOpen, setIsIntegrityModalOpen] = useState(false);
+  const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isIntegrityChecking, setIsIntegrityChecking] = useState(false);
+  const [isSessionDiagnosisRunning, setIsSessionDiagnosisRunning] = useState(false);
   const [isLibraryLoading, setIsLibraryLoading] = useState(true);
   const [isPathPanelOpen, setIsPathPanelOpen] = useState(false);
   const [codexHomeDraft, setCodexHomeDraft] = useState("");
@@ -541,6 +572,9 @@ export default function App() {
   );
   const [isAdditionalItemsVisible, setIsAdditionalItemsVisible] = useState(false);
   const [expandedDetailItemIds, setExpandedDetailItemIds] = useState<Record<string, boolean>>({});
+  const [expandedIntegrityReferenceKeys, setExpandedIntegrityReferenceKeys] = useState<
+    Record<string, boolean>
+  >({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isProjectsCollapsed, setIsProjectsCollapsed] = useState(() =>
     readStoredCollapsedState(PROJECTS_COLLAPSED_STORAGE_KEY)
@@ -566,6 +600,14 @@ export default function App() {
     integrityReport?.checks.filter((check) => check.status === "fail") ?? [];
   const integrityPassedChecks =
     integrityReport?.checks.filter((check) => check.status === "pass") ?? [];
+  const sessionDiagnosisIssues = sessionDiagnosisReport
+    ? [
+        ...sessionDiagnosisReport.duplicates,
+        ...sessionDiagnosisReport.importGaps,
+        ...sessionDiagnosisReport.sourceProblems,
+        ...sessionDiagnosisReport.parseProblems
+      ]
+    : [];
   const sidebarProjects = projects.filter((project) => project.isSidebarProject);
   const historicalProjects = projects.filter((project) => !project.isSidebarProject);
   const allProjectIds = new Set(projects.map((project) => project.id));
@@ -590,6 +632,22 @@ export default function App() {
     },
     {}
   );
+
+  function revealThreadSelection(threadId: string) {
+    const nextThread = threads.find((thread) => thread.id === threadId) ?? null;
+    const nextProject = projects.find((project) => project.id === nextThread?.projectId) ?? null;
+
+    if (nextThread && nextProject && allProjectIds.has(nextThread.projectId)) {
+      setExpandedProjectIds((current) => ({
+        ...current,
+        [nextThread.projectId]: true
+      }));
+
+      if (!nextProject.isSidebarProject) {
+        setIsHistoricalCollapsed(false);
+      }
+    }
+  }
 
   async function withLibraryLoad(task: () => Promise<void>) {
     setIsLibraryLoading(true);
@@ -718,14 +776,14 @@ export default function App() {
   }, [expandedProjectIds]);
 
   useEffect(() => {
-    if (!isTurnModalOpen && !isIntegrityModalOpen) {
+    if (!isTurnModalOpen && !isDiagnosticsModalOpen) {
       return;
     }
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsTurnModalOpen(false);
-        setIsIntegrityModalOpen(false);
+        setIsDiagnosticsModalOpen(false);
       }
     }
 
@@ -733,12 +791,33 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isTurnModalOpen, isIntegrityModalOpen]);
+  }, [isTurnModalOpen, isDiagnosticsModalOpen]);
 
   useEffect(() => {
     setIsAdditionalItemsVisible(false);
     setExpandedDetailItemIds({});
   }, [selectedTurnId, isTurnModalOpen]);
+
+  useEffect(() => {
+    setExpandedIntegrityReferenceKeys({});
+  }, [integrityReport?.checkedAt]);
+
+  useEffect(() => {
+    if (isDiagnosticsModalOpen || rightPanelMode !== "turns" || !selectedTurnId) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const element = document.querySelector<HTMLElement>(
+        `[data-turn-card-id="${selectedTurnId}"]`
+      );
+      element?.scrollIntoView({ block: "nearest" });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [selectedTurnId, rightPanelMode, turns.length, isDiagnosticsModalOpen]);
 
   async function handleImportSessions() {
     setIsImporting(true);
@@ -768,19 +847,7 @@ export default function App() {
   }
 
   function handleThreadSelect(threadId: string) {
-    const nextThread = threads.find((thread) => thread.id === threadId) ?? null;
-    const nextProject = projects.find((project) => project.id === nextThread?.projectId) ?? null;
-
-    if (nextThread && nextProject && allProjectIds.has(nextThread.projectId)) {
-      setExpandedProjectIds((current) => ({
-        ...current,
-        [nextThread.projectId]: true
-      }));
-
-      if (!nextProject.isSidebarProject) {
-        setIsHistoricalCollapsed(false);
-      }
-    }
+    revealThreadSelection(threadId);
 
     void withLibraryLoad(async () => {
       await loadTurnsForThread(threadId, null);
@@ -798,14 +865,21 @@ export default function App() {
     setIsTurnModalOpen(false);
   }
 
-  function handleCloseIntegrityModal() {
-    setIsIntegrityModalOpen(false);
+  function handleCloseDiagnosticsModal() {
+    setIsDiagnosticsModalOpen(false);
   }
 
   function handleDetailItemToggle(itemId: string) {
     setExpandedDetailItemIds((current) => ({
       ...current,
       [itemId]: !current[itemId]
+    }));
+  }
+
+  function handleIntegrityReferenceToggle(checkKey: string) {
+    setExpandedIntegrityReferenceKeys((current) => ({
+      ...current,
+      [checkKey]: !current[checkKey]
     }));
   }
 
@@ -826,12 +900,45 @@ export default function App() {
     try {
       const nextReport = await window.codexCardFeed.runIntegrityCheck();
       setIntegrityReport(nextReport);
-      setIsIntegrityModalOpen(true);
+      setIsDiagnosticsModalOpen(true);
     } catch (error) {
       setLoadError(getErrorMessage(error));
     } finally {
       setIsIntegrityChecking(false);
     }
+  }
+
+  async function handleRunSessionDiagnosis() {
+    setIsSessionDiagnosisRunning(true);
+    setLoadError(null);
+
+    try {
+      const nextReport = await window.codexCardFeed.runSessionDiagnosis();
+      setSessionDiagnosisReport(nextReport);
+      setIsDiagnosticsModalOpen(true);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSessionDiagnosisRunning(false);
+    }
+  }
+
+  function handleOpenDiagnosticsModal() {
+    setIsDiagnosticsModalOpen(true);
+  }
+
+  function handleOpenIntegritySample(sampleRef: IntegritySampleRef) {
+    if (!sampleRef.threadId) {
+      return;
+    }
+
+    revealThreadSelection(sampleRef.threadId);
+    setRightPanelMode("turns");
+    setIsDiagnosticsModalOpen(false);
+
+    void withLibraryLoad(async () => {
+      await loadTurnsForThread(sampleRef.threadId, sampleRef.turnId);
+    });
   }
 
   async function handleSaveCodexHome() {
@@ -913,14 +1020,23 @@ export default function App() {
           <p className="sidebar-kicker">Codex conversation browser</p>
           <div className="sidebar-brand-row">
             <h1>CodexCardFeed</h1>
-            <button
-              aria-expanded={isPathPanelOpen}
-              className="sidebar-utility-button"
-              onClick={() => setIsPathPanelOpen((value) => !value)}
-              type="button"
-            >
-              Paths
-            </button>
+            <div className="sidebar-brand-actions">
+              <button
+                className="sidebar-utility-button"
+                onClick={handleOpenDiagnosticsModal}
+                type="button"
+              >
+                Diagnostics
+              </button>
+              <button
+                aria-expanded={isPathPanelOpen}
+                className="sidebar-utility-button"
+                onClick={() => setIsPathPanelOpen((value) => !value)}
+                type="button"
+              >
+                Paths
+              </button>
+            </div>
           </div>
 
           {isPathPanelOpen ? (
@@ -1268,34 +1384,13 @@ export default function App() {
                 Questions
               </button>
             </div>
-            <div className="panel-toolbar-actions">
-              <p className="panel-toolbar-meta muted">
-                {selectedThread
-                  ? rightPanelMode === "turns"
-                    ? formatCountLabel(turns.length, "turn")
-                    : formatCountLabel(questionTurns.length, "question")
-                  : "No thread selected"}
-              </p>
-              {integrityReport ? (
-                <p
-                  className={`mini-meta integrity-toolbar-meta ${
-                    integrityReport.summary.failedChecks ? "has-issues" : "is-clean"
-                  }`}
-                >
-                  {integrityReport.summary.failedChecks
-                    ? `${formatCountLabel(integrityReport.summary.failedChecks, "issue")} found`
-                    : "No issues found"}
-                </p>
-              ) : null}
-              <button
-                className="secondary-button"
-                disabled={isIntegrityChecking}
-                onClick={() => void handleRunIntegrityCheck()}
-                type="button"
-              >
-                {isIntegrityChecking ? "Checking..." : "Data check"}
-              </button>
-            </div>
+            <p className="panel-toolbar-meta muted">
+              {selectedThread
+                ? rightPanelMode === "turns"
+                  ? formatCountLabel(turns.length, "turn")
+                  : formatCountLabel(questionTurns.length, "question")
+                : "No thread selected"}
+            </p>
           </div>
         </div>
 
@@ -1305,6 +1400,7 @@ export default function App() {
               <div className="selection-list">
                 {turns.map((turn) => (
                   <article
+                    data-turn-card-id={turn.id}
                     key={turn.id}
                     className={`selection-button selection-card ${
                       selectedTurnId === turn.id ? "is-active" : ""
@@ -1386,22 +1482,18 @@ export default function App() {
         </section>
       </section>
 
-      {isIntegrityModalOpen && integrityReport ? (
-        <div
-          className="modal-overlay"
-          onClick={handleCloseIntegrityModal}
-          role="presentation"
-        >
+      {isDiagnosticsModalOpen ? (
+        <div className="modal-overlay" onClick={handleCloseDiagnosticsModal} role="presentation">
           <section
-            className="card modal-dialog integrity-modal"
+            className="card modal-dialog diagnostics-modal"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="modal-header">
               <div>
-                <p className="workspace-kicker">Data integrity</p>
-                <h2>Database integrity check</h2>
+                <p className="workspace-kicker">Diagnostics</p>
+                <h2>Data check and session diagnosis</h2>
                 <p className="muted">
-                  Last checked {formatDateTime(integrityReport.checkedAt)}
+                  Inspect DB consistency and Codex session import tracking in one place.
                 </p>
               </div>
               <div className="modal-header-actions">
@@ -1411,11 +1503,19 @@ export default function App() {
                   onClick={() => void handleRunIntegrityCheck()}
                   type="button"
                 >
-                  {isIntegrityChecking ? "Checking..." : "Run again"}
+                  {isIntegrityChecking ? "Checking..." : "Data check"}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={isSessionDiagnosisRunning}
+                  onClick={() => void handleRunSessionDiagnosis()}
+                  type="button"
+                >
+                  {isSessionDiagnosisRunning ? "Diagnosing..." : "Session diagnosis"}
                 </button>
                 <button
                   className="modal-close"
-                  onClick={handleCloseIntegrityModal}
+                  onClick={handleCloseDiagnosticsModal}
                   type="button"
                 >
                   Close
@@ -1425,97 +1525,571 @@ export default function App() {
 
             <div className="modal-scroll">
               <div className="detail-body">
-                <section className="integrity-summary-panel">
-                  <dl className="integrity-summary-grid">
-                    <div>
-                      <dt>Total checks</dt>
-                      <dd>{formatInteger(integrityReport.summary.totalChecks)}</dd>
-                    </div>
-                    <div>
-                      <dt>Passed</dt>
-                      <dd>{formatInteger(integrityReport.summary.passedChecks)}</dd>
-                    </div>
-                    <div>
-                      <dt>Failed</dt>
-                      <dd>{formatInteger(integrityReport.summary.failedChecks)}</dd>
-                    </div>
-                    <div>
-                      <dt>Errors</dt>
-                      <dd>{formatInteger(integrityReport.summary.errorCount)}</dd>
-                    </div>
-                    <div>
-                      <dt>Warnings</dt>
-                      <dd>{formatInteger(integrityReport.summary.warningCount)}</dd>
-                    </div>
-                  </dl>
-                </section>
-
                 <section className="integrity-section">
                   <div className="integrity-section-header">
-                    <strong>Issues</strong>
-                    <span className="mini-meta">
-                      {formatCountLabel(integrityFailedChecks.length, "check")}
-                    </span>
+                    <div>
+                      <strong>Data check</strong>
+                      <p className="integrity-check-description">
+                        {integrityReport
+                          ? `Last checked ${formatDateTime(integrityReport.checkedAt)}`
+                          : "Run a data check to inspect turn, thread, and token consistency."}
+                      </p>
+                    </div>
                   </div>
 
-                  {integrityFailedChecks.length ? (
-                    <div className="integrity-check-list">
-                      {integrityFailedChecks.map((check) => (
-                        <article className="integrity-check-card" key={check.key}>
-                          <div className="integrity-check-header">
-                            <div>
-                              <strong>{check.label}</strong>
-                              <p className="integrity-check-description">
-                                {check.description}
-                              </p>
-                            </div>
-                            <div className="integrity-check-pills">
-                              <span
-                                className={`integrity-severity-pill ${
-                                  check.severity === "error" ? "is-error" : "is-warning"
-                                }`}
-                              >
-                                {check.severity}
-                              </span>
-                              <span className="count-pill">
-                                {formatInteger(check.affectedCount)}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="integrity-check-message">{check.message}</p>
-                          {check.sampleRefs.length ? (
-                            <ul className="integrity-sample-list">
-                              {check.sampleRefs.map((sampleRef) => (
-                                <li key={`${check.key}:${sampleRef}`}>{sampleRef}</li>
-                              ))}
-                            </ul>
-                          ) : null}
-                        </article>
-                      ))}
-                    </div>
+                  {integrityReport ? (
+                    <dl className="integrity-summary-grid">
+                      <div>
+                        <dt>Total checks</dt>
+                        <dd>{formatInteger(integrityReport.summary.totalChecks)}</dd>
+                      </div>
+                      <div>
+                        <dt>Passed</dt>
+                        <dd>{formatInteger(integrityReport.summary.passedChecks)}</dd>
+                      </div>
+                      <div>
+                        <dt>Failed</dt>
+                        <dd>{formatInteger(integrityReport.summary.failedChecks)}</dd>
+                      </div>
+                      <div>
+                        <dt>New issues</dt>
+                        <dd>{formatInteger(integrityReport.summary.newIssueCount)}</dd>
+                      </div>
+                      <div>
+                        <dt>Errors</dt>
+                        <dd>{formatInteger(integrityReport.summary.errorCount)}</dd>
+                      </div>
+                      <div>
+                        <dt>Warnings</dt>
+                        <dd>{formatInteger(integrityReport.summary.warningCount)}</dd>
+                      </div>
+                    </dl>
                   ) : (
                     <p className="empty-state integrity-empty-state">
-                      No integrity issues were detected.
+                      No data check has been run yet.
                     </p>
                   )}
                 </section>
 
-                <section className="integrity-section">
-                  <div className="integrity-section-header">
-                    <strong>Passed checks</strong>
-                    <span className="mini-meta">
-                      {formatCountLabel(integrityPassedChecks.length, "check")}
-                    </span>
+                {integrityReport ? (
+                  <section className="integrity-section">
+                    <div className="integrity-section-header">
+                      <strong>Issues</strong>
+                      <span className="mini-meta">
+                        {formatTotalAndNewLabel(
+                          integrityFailedChecks.length,
+                          integrityReport.summary.newIssueCount,
+                          "check"
+                        )}
+                      </span>
+                    </div>
+
+                    {integrityFailedChecks.length ? (
+                      <div className="integrity-check-list">
+                        {integrityFailedChecks.map((check) => {
+                          const hasNewReferences = check.newAffectedCount > 0;
+                          const isReferenceListExpanded =
+                            expandedIntegrityReferenceKeys[check.key] === true;
+                          const visibleSampleRefs =
+                            hasNewReferences && !isReferenceListExpanded
+                              ? check.sampleRefs.slice(0, 5)
+                              : check.sampleRefs;
+                          const shouldShowReferenceToggle =
+                            hasNewReferences && check.sampleRefs.length > 5;
+
+                          return (
+                            <article className="integrity-check-card" key={check.key}>
+                              <div className="integrity-check-header">
+                                <div>
+                                  <strong>{check.label}</strong>
+                                  <p className="integrity-check-description">
+                                    {check.description}
+                                  </p>
+                                </div>
+                                <div className="integrity-check-pills">
+                                  <span
+                                    className={`integrity-severity-pill ${
+                                      check.severity === "error" ? "is-error" : "is-warning"
+                                    }`}
+                                  >
+                                    {check.severity}
+                                  </span>
+                                  <span className="count-pill">
+                                    {`Total ${formatInteger(check.affectedCount)}`}
+                                  </span>
+                                  <span className="count-pill count-pill-new">
+                                    {`New ${formatInteger(check.newAffectedCount)}`}
+                                  </span>
+                                </div>
+                              </div>
+                              <p className="integrity-check-message">{check.message}</p>
+                              {check.sampleRefs.length ? (
+                                <div className="integrity-reference-block">
+                                  <p className="mini-meta integrity-reference-label">
+                                    {hasNewReferences
+                                      ? `${formatCountLabel(
+                                          check.newAffectedCount,
+                                          "new reference"
+                                        )} shown first`
+                                      : "Sample references"}
+                                  </p>
+                                  <ul className="integrity-sample-list">
+                                    {visibleSampleRefs.map((sampleRef) => (
+                                      <li
+                                        key={[
+                                          check.key,
+                                          sampleRef.label,
+                                          sampleRef.threadId ?? "none",
+                                          sampleRef.turnId ?? "none"
+                                        ].join(":")}
+                                      >
+                                        {sampleRef.threadId ? (
+                                          <button
+                                            className={`integrity-sample-link ${
+                                              sampleRef.isNew ? "is-new" : ""
+                                            }`}
+                                            onClick={() => handleOpenIntegritySample(sampleRef)}
+                                            type="button"
+                                          >
+                                            {sampleRef.label}
+                                          </button>
+                                        ) : (
+                                          <span
+                                            className={
+                                              sampleRef.isNew ? "integrity-sample-text is-new" : undefined
+                                            }
+                                          >
+                                            {sampleRef.label}
+                                          </span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {shouldShowReferenceToggle ? (
+                                    <button
+                                      className="detail-expand-toggle integrity-reference-toggle"
+                                      onClick={() => handleIntegrityReferenceToggle(check.key)}
+                                      type="button"
+                                    >
+                                      {isReferenceListExpanded
+                                        ? "Show less"
+                                        : `Show more (${formatInteger(
+                                            check.sampleRefs.length - 5
+                                          )})`}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="empty-state integrity-empty-state">
+                        No integrity issues were detected.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {integrityReport ? (
+                  <section className="integrity-section">
+                    <div className="integrity-section-header">
+                      <strong>Passed checks</strong>
+                      <span className="mini-meta">
+                        {formatCountLabel(integrityPassedChecks.length, "check")}
+                      </span>
+                    </div>
+                    <div className="integrity-pass-list">
+                      {integrityPassedChecks.map((check) => (
+                        <article className="integrity-pass-row" key={check.key}>
+                          <strong>{check.label}</strong>
+                          <p className="mini-meta">{check.message}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                <section className="diagnosis-section">
+                  <div className="diagnosis-section-header">
+                    <div>
+                      <strong>Session diagnosis</strong>
+                      <p className="diagnosis-issue-message">
+                        {sessionDiagnosisReport
+                          ? `Last checked ${formatDateTime(sessionDiagnosisReport.checkedAt)}`
+                          : "Run a session diagnosis to detect import gaps and source tracking problems."}
+                      </p>
+                    </div>
                   </div>
-                  <div className="integrity-pass-list">
-                    {integrityPassedChecks.map((check) => (
-                      <article className="integrity-pass-row" key={check.key}>
-                        <strong>{check.label}</strong>
-                        <p className="mini-meta">{check.message}</p>
-                      </article>
-                    ))}
-                  </div>
+
+                  {sessionDiagnosisReport ? (
+                    <section className="diagnosis-summary-panel">
+                      <dl className="diagnosis-summary-grid">
+                        <div>
+                          <dt>Current files</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.scannedFiles)}</dd>
+                        </div>
+                        <div>
+                          <dt>Tracked files</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.trackedFiles)}</dd>
+                        </div>
+                        <div>
+                          <dt>DB threads</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.dbThreads)}</dd>
+                        </div>
+                        <div>
+                          <dt>Issues</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.totalIssueCount)}</dd>
+                        </div>
+                        <div>
+                          <dt>New issues</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.newTotalIssueCount)}</dd>
+                        </div>
+                        <div>
+                          <dt>Import gaps</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.importGapCount)}</dd>
+                        </div>
+                        <div>
+                          <dt>Duplicates</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.duplicateCount)}</dd>
+                        </div>
+                      </dl>
+
+                      <dl className="diagnosis-path-grid">
+                        <div>
+                          <dt>Codex source</dt>
+                          <dd>{sessionDiagnosisReport.codexHome}</dd>
+                        </div>
+                        <div>
+                          <dt>Sessions root</dt>
+                          <dd>{sessionDiagnosisReport.sessionsRoot}</dd>
+                        </div>
+                      </dl>
+                    </section>
+                  ) : (
+                    <p className="empty-state integrity-empty-state">
+                      No session diagnosis has been run yet.
+                    </p>
+                  )}
                 </section>
+
+                {sessionDiagnosisReport ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Import gaps</strong>
+                      <span className="mini-meta">
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.importGaps.length,
+                          sessionDiagnosisReport.summary.newImportGapCount,
+                          "issue"
+                        )}
+                      </span>
+                    </div>
+
+                    {sessionDiagnosisReport.importGaps.length ? (
+                      <div className="diagnosis-issue-list">
+                        {sessionDiagnosisReport.importGaps.map((issue, issueIndex) => (
+                          <article
+                            className="diagnosis-issue-card"
+                            key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                          >
+                            <div className="diagnosis-issue-header">
+                              <div>
+                                <strong>{issue.title}</strong>
+                                <p className="diagnosis-issue-message">{issue.message}</p>
+                              </div>
+                              <div className="diagnosis-issue-pills">
+                                <span
+                                  className={`integrity-severity-pill ${
+                                    issue.severity === "error" ? "is-error" : "is-warning"
+                                  }`}
+                                >
+                                  {issue.severity}
+                                </span>
+                                <span className="diagnosis-action-pill">
+                                  {formatSuggestedActionLabel(issue.suggestedAction)}
+                                </span>
+                              </div>
+                            </div>
+                            <dl className="diagnosis-meta-grid">
+                              {issue.sourcePath ? (
+                                <div>
+                                  <dt>Source</dt>
+                                  <dd>{issue.sourcePath}</dd>
+                                </div>
+                              ) : null}
+                              {issue.parsedThreadId ? (
+                                <div>
+                                  <dt>Parsed</dt>
+                                  <dd>{issue.parsedThreadId}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedThreadId ? (
+                                <div>
+                                  <dt>Tracked</dt>
+                                  <dd>{issue.trackedThreadId}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedStatus ? (
+                                <div>
+                                  <dt>Status</dt>
+                                  <dd>{issue.trackedStatus}</dd>
+                                </div>
+                              ) : null}
+                              {issue.lastImportedAt ? (
+                                <div>
+                                  <dt>Imported</dt>
+                                  <dd>{formatDateTime(issue.lastImportedAt)}</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-state integrity-empty-state">
+                        No import gaps were detected.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {sessionDiagnosisReport ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Duplicate conflicts</strong>
+                      <span className="mini-meta">
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.duplicates.length,
+                          sessionDiagnosisReport.summary.newDuplicateCount,
+                          "issue"
+                        )}
+                      </span>
+                    </div>
+
+                    {sessionDiagnosisReport.duplicates.length ? (
+                      <div className="diagnosis-issue-list">
+                        {sessionDiagnosisReport.duplicates.map((issue, issueIndex) => (
+                          <article
+                            className="diagnosis-issue-card"
+                            key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                          >
+                            <div className="diagnosis-issue-header">
+                              <div>
+                                <strong>{issue.title}</strong>
+                                <p className="diagnosis-issue-message">{issue.message}</p>
+                              </div>
+                              <div className="diagnosis-issue-pills">
+                                <span
+                                  className={`integrity-severity-pill ${
+                                    issue.severity === "error" ? "is-error" : "is-warning"
+                                  }`}
+                                >
+                                  {issue.severity}
+                                </span>
+                                <span className="diagnosis-action-pill">
+                                  {formatSuggestedActionLabel(issue.suggestedAction)}
+                                </span>
+                              </div>
+                            </div>
+                            <dl className="diagnosis-meta-grid">
+                              {issue.sourcePath ? (
+                                <div>
+                                  <dt>Source</dt>
+                                  <dd>{issue.sourcePath}</dd>
+                                </div>
+                              ) : null}
+                              {issue.relatedThreadIds.length ? (
+                                <div className="is-stacked">
+                                  <dt>Threads</dt>
+                                  <dd>
+                                    <ul className="detail-query-list">
+                                      {issue.relatedThreadIds.map((threadId) => (
+                                        <li key={`${issue.code}:${threadId}`}>{threadId}</li>
+                                      ))}
+                                    </ul>
+                                  </dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-state integrity-empty-state">
+                        No duplicate DB conflicts were detected.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {sessionDiagnosisReport ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Source problems</strong>
+                      <span className="mini-meta">
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.sourceProblems.length,
+                          sessionDiagnosisReport.summary.newSourceProblemCount,
+                          "issue"
+                        )}
+                      </span>
+                    </div>
+
+                    {sessionDiagnosisReport.sourceProblems.length ? (
+                      <div className="diagnosis-issue-list">
+                        {sessionDiagnosisReport.sourceProblems.map((issue, issueIndex) => (
+                          <article
+                            className="diagnosis-issue-card"
+                            key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                          >
+                            <div className="diagnosis-issue-header">
+                              <div>
+                                <strong>{issue.title}</strong>
+                                <p className="diagnosis-issue-message">{issue.message}</p>
+                              </div>
+                              <div className="diagnosis-issue-pills">
+                                <span
+                                  className={`integrity-severity-pill ${
+                                    issue.severity === "error" ? "is-error" : "is-warning"
+                                  }`}
+                                >
+                                  {issue.severity}
+                                </span>
+                                <span className="diagnosis-action-pill">
+                                  {formatSuggestedActionLabel(issue.suggestedAction)}
+                                </span>
+                              </div>
+                            </div>
+                            <dl className="diagnosis-meta-grid">
+                              {issue.sourcePath ? (
+                                <div>
+                                  <dt>Source</dt>
+                                  <dd>{issue.sourcePath}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedThreadId ? (
+                                <div>
+                                  <dt>Tracked</dt>
+                                  <dd>{issue.trackedThreadId}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedStatus ? (
+                                <div>
+                                  <dt>Status</dt>
+                                  <dd>{issue.trackedStatus}</dd>
+                                </div>
+                              ) : null}
+                              {issue.lastImportedAt ? (
+                                <div>
+                                  <dt>Imported</dt>
+                                  <dd>{formatDateTime(issue.lastImportedAt)}</dd>
+                                </div>
+                              ) : null}
+                              {issue.lastError ? (
+                                <div>
+                                  <dt>Last error</dt>
+                                  <dd>{issue.lastError}</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-state integrity-empty-state">
+                        No source tracking problems were detected.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {sessionDiagnosisReport ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Parse problems</strong>
+                      <span className="mini-meta">
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.parseProblems.length,
+                          sessionDiagnosisReport.summary.newParseProblemCount,
+                          "issue"
+                        )}
+                      </span>
+                    </div>
+
+                    {sessionDiagnosisReport.parseProblems.length ? (
+                      <div className="diagnosis-issue-list">
+                        {sessionDiagnosisReport.parseProblems.map((issue, issueIndex) => (
+                          <article
+                            className="diagnosis-issue-card"
+                            key={`${issue.code}:${issue.sourcePath ?? issueIndex}`}
+                          >
+                            <div className="diagnosis-issue-header">
+                              <div>
+                                <strong>{issue.title}</strong>
+                                <p className="diagnosis-issue-message">{issue.message}</p>
+                              </div>
+                              <div className="diagnosis-issue-pills">
+                                <span
+                                  className={`integrity-severity-pill ${
+                                    issue.severity === "error" ? "is-error" : "is-warning"
+                                  }`}
+                                >
+                                  {issue.severity}
+                                </span>
+                                <span className="diagnosis-action-pill">
+                                  {formatSuggestedActionLabel(issue.suggestedAction)}
+                                </span>
+                              </div>
+                            </div>
+                            <dl className="diagnosis-meta-grid">
+                              {issue.sourcePath ? (
+                                <div>
+                                  <dt>Source</dt>
+                                  <dd>{issue.sourcePath}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedThreadId ? (
+                                <div>
+                                  <dt>Tracked</dt>
+                                  <dd>{issue.trackedThreadId}</dd>
+                                </div>
+                              ) : null}
+                              {issue.trackedStatus ? (
+                                <div>
+                                  <dt>Status</dt>
+                                  <dd>{issue.trackedStatus}</dd>
+                                </div>
+                              ) : null}
+                              {issue.lastError ? (
+                                <div>
+                                  <dt>Last error</dt>
+                                  <dd>{issue.lastError}</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="empty-state integrity-empty-state">
+                        No parse problems were detected.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {sessionDiagnosisReport && sessionDiagnosisIssues.length === 0 ? (
+                  <section className="diagnosis-section">
+                    <div className="diagnosis-section-header">
+                      <strong>Result</strong>
+                    </div>
+                    <p className="empty-state integrity-empty-state">
+                      Current Codex source files and DB session tracking look consistent.
+                    </p>
+                  </section>
+                ) : null}
               </div>
             </div>
           </section>
