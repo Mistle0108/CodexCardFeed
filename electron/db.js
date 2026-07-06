@@ -341,6 +341,11 @@ function listProjects(database) {
         projects.display_name,
         projects.source_kind,
         projects.source_path,
+        json_group_array(DISTINCT CASE
+          WHEN threads.source_session_path IS NOT NULL
+            AND threads.source_session_path <> ''
+          THEN threads.source_session_path
+        END) AS source_session_paths_json,
         COUNT(DISTINCT threads.id) AS thread_count,
         COUNT(DISTINCT turns.id) AS turn_count,
         MAX(COALESCE(threads.updated_at, threads.last_seen_at)) AS last_activity_at
@@ -365,6 +370,9 @@ function listProjects(database) {
       displayName: row.display_name,
       sourceKind: row.source_kind,
       sourcePath: row.source_path,
+      sourceSessionPaths: JSON.parse(row.source_session_paths_json ?? "[]").filter(
+        (value) => typeof value === "string" && value.trim()
+      ),
       threadCount: Number(row.thread_count ?? 0),
       turnCount: Number(row.turn_count ?? 0),
       lastActivityAt: row.last_activity_at ?? null
