@@ -89,7 +89,8 @@ type ProjectListItem = {
   displayName: string;
   sourceKind: string;
   sourcePath: string;
-  isSidebarProject: boolean;
+  sourceSessionPaths: string[];
+  projectStatus: "active" | "historical" | "removed";
   threadCount: number;
   turnCount: number;
   lastActivityAt: string | null;

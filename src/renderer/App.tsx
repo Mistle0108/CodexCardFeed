@@ -608,8 +608,23 @@ export default function App() {
         ...sessionDiagnosisReport.parseProblems
       ]
     : [];
-  const sidebarProjects = projects.filter((project) => project.isSidebarProject);
-  const historicalProjects = projects.filter((project) => !project.isSidebarProject);
+  const sidebarProjects = projects.filter((project) => project.projectStatus === "active");
+  const historicalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
+    .sort((left, right) => {
+      if (left.projectStatus === right.projectStatus) {
+        return 0;
+      }
+
+      if (left.projectStatus === "historical") {
+        return -1;
+      }
+
+      if (right.projectStatus === "historical") {
+        return 1;
+      }
+
+      return 0;
+    });
   const allProjectIds = new Set(projects.map((project) => project.id));
   const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
   const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
@@ -643,7 +658,7 @@ export default function App() {
         [nextThread.projectId]: true
       }));
 
-      if (!nextProject.isSidebarProject) {
+      if (nextProject.projectStatus !== "active") {
         setIsHistoricalCollapsed(false);
       }
     }
@@ -724,7 +739,7 @@ export default function App() {
         [nextThread.projectId]: true
       }));
 
-      if (!nextProject.isSidebarProject) {
+      if (nextProject.projectStatus !== "active") {
         setIsHistoricalCollapsed(false);
       }
     }
@@ -1247,7 +1262,16 @@ export default function App() {
                       type="button"
                     >
                       <div className="sidebar-project-heading">
-                        <strong>{project.displayName}</strong>
+                        <div className="sidebar-project-title-row">
+                          <strong>{project.displayName}</strong>
+                          <span
+                            className={`sidebar-status-badge ${
+                              project.projectStatus === "removed" ? "is-removed" : "is-historical"
+                            }`}
+                          >
+                            {project.projectStatus}
+                          </span>
+                        </div>
                         <span className="sidebar-project-caret" aria-hidden="true">
                           {expandedProjectIds[project.id] ? "v" : ">"}
                         </span>

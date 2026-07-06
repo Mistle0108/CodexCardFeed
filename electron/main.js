@@ -30,6 +30,18 @@ function normalizePathForComparison(sourcePath) {
     : normalizedWorkspaceRoot;
 }
 
+function doesSourceSessionFileExist(sourceSessionPath) {
+  if (typeof sourceSessionPath !== "string" || !sourceSessionPath.trim()) {
+    return false;
+  }
+
+  try {
+    return fs.existsSync(sourceSessionPath) && fs.statSync(sourceSessionPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function getCurrentCodexHome() {
   return pathSettings?.codexHome ?? getDefaultCodexHome();
 }
@@ -206,15 +218,25 @@ app.whenReady().then(() => {
     },
     listProjects() {
       const sidebarWorkspaceRoots = new Set(
-        listSidebarWorkspaceRoots(getCurrentCodexHome())
+        listSidebarWorkspaceRoots(getCurrentCodexHome()).map(normalizePathForComparison)
       );
 
-      return listProjectRows(databaseState.database).map((project) => ({
-        ...project,
-        isSidebarProject: sidebarWorkspaceRoots.has(
-          normalizePathForComparison(project.sourcePath)
-        )
-      }));
+      return listProjectRows(databaseState.database).map((project) => {
+        const normalizedProjectPath = normalizePathForComparison(project.sourcePath);
+        const hasCurrentSourceSession = project.sourceSessionPaths.some((sourceSessionPath) =>
+          doesSourceSessionFileExist(sourceSessionPath)
+        );
+        const projectStatus = sidebarWorkspaceRoots.has(normalizedProjectPath)
+          ? "active"
+          : hasCurrentSourceSession
+            ? "historical"
+            : "removed";
+
+        return {
+          ...project,
+          projectStatus
+        };
+      });
     },
     listThreads(projectId) {
       return listThreads(databaseState.database, projectId ?? null);
