@@ -29,6 +29,55 @@ function formatInteger(value: number) {
   return integerFormatter.format(value);
 }
 
+function compareNullableIsoDesc(left: string | null, right: string | null) {
+  if (left === right) {
+    return 0;
+  }
+
+  if (!left) {
+    return 1;
+  }
+
+  if (!right) {
+    return -1;
+  }
+
+  return left > right ? -1 : 1;
+}
+
+function sortThreadRows(rows: ThreadListItem[]) {
+  return [...rows].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return Number(right.isPinned) - Number(left.isPinned);
+    }
+
+    const activityOrder = compareNullableIsoDesc(
+      left.updatedAt ?? left.lastSeenAt,
+      right.updatedAt ?? right.lastSeenAt
+    );
+
+    if (activityOrder !== 0) {
+      return activityOrder;
+    }
+
+    return right.id.localeCompare(left.id);
+  });
+}
+
+function sortTurnRows(rows: TurnListItem[]) {
+  return [...rows].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return Number(right.isPinned) - Number(left.isPinned);
+    }
+
+    if (left.ordinal !== right.ordinal) {
+      return right.ordinal - left.ordinal;
+    }
+
+    return right.id.localeCompare(left.id);
+  });
+}
+
 function formatTotalAndNewLabel(totalCount: number, newCount: number, singular: string) {
   return `${formatCountLabel(totalCount, singular)} / ${formatCountLabel(newCount, `new ${singular}`)}`;
 }
@@ -132,6 +181,16 @@ function getTurnHeading(turn: TurnListItem) {
   return turn.displayTitle
     ? `Turn ${turn.ordinal} / ${turn.displayTitle}`
     : `Turn ${turn.ordinal}`;
+}
+
+function resolveThreadDisplayTitleOverride(draftValue: string, sourceTitle: string) {
+  const normalizedDraft = draftValue.trim();
+  return normalizedDraft && normalizedDraft !== sourceTitle.trim() ? normalizedDraft : null;
+}
+
+function resolveTurnDisplayTitleOverride(draftValue: string) {
+  const normalizedDraft = draftValue.trim();
+  return normalizedDraft || null;
 }
 
 function getQuestionPreview(turn: TurnListItem) {
@@ -570,6 +629,12 @@ export default function App() {
   const [isSavingPathKey, setIsSavingPathKey] = useState<"codexHome" | "databasePath" | null>(
     null
   );
+  const [isThreadTitleEditing, setIsThreadTitleEditing] = useState(false);
+  const [threadTitleDraft, setThreadTitleDraft] = useState("");
+  const [isTurnTitleEditing, setIsTurnTitleEditing] = useState(false);
+  const [turnTitleDraft, setTurnTitleDraft] = useState("");
+  const [isSavingThreadOverride, setIsSavingThreadOverride] = useState(false);
+  const [isSavingTurnOverride, setIsSavingTurnOverride] = useState(false);
   const [isAdditionalItemsVisible, setIsAdditionalItemsVisible] = useState(false);
   const [expandedDetailItemIds, setExpandedDetailItemIds] = useState<Record<string, boolean>>({});
   const [expandedIntegrityReferenceKeys, setExpandedIntegrityReferenceKeys] = useState<
@@ -636,6 +701,16 @@ export default function App() {
       databasePathDraft.trim() &&
       databasePathDraft.trim() !== shellInfo.databasePath
   );
+  const canSaveThreadTitle = Boolean(
+    selectedThread && threadTitleDraft.trim() !== selectedThread.title.trim()
+  );
+  const canResetThreadTitle = Boolean(
+    selectedThread && selectedThread.title !== selectedThread.sourceTitle
+  );
+  const canSaveTurnTitle = Boolean(
+    selectedTurn && turnTitleDraft.trim() !== (selectedTurn.displayTitle ?? "")
+  );
+  const canResetTurnTitle = Boolean(selectedTurn?.displayTitle);
   const threadsByProjectId = projectThreads.reduce<Record<string, ThreadListItem[]>>(
     (groups, thread) => {
       if (!groups[thread.projectId]) {
@@ -814,6 +889,16 @@ export default function App() {
   }, [selectedTurnId, isTurnModalOpen]);
 
   useEffect(() => {
+    setIsThreadTitleEditing(false);
+    setThreadTitleDraft(selectedThread?.title ?? "");
+  }, [selectedThread?.id, selectedThread?.title]);
+
+  useEffect(() => {
+    setIsTurnTitleEditing(false);
+    setTurnTitleDraft(selectedTurn?.displayTitle ?? "");
+  }, [selectedTurn?.id, selectedTurn?.displayTitle]);
+
+  useEffect(() => {
     setExpandedIntegrityReferenceKeys({});
   }, [integrityReport?.checkedAt]);
 
@@ -882,6 +967,203 @@ export default function App() {
 
   function handleCloseDiagnosticsModal() {
     setIsDiagnosticsModalOpen(false);
+  }
+
+  function applyThreadOverrideToState(threadId: string, changes: LocalOverrideInput) {
+    setThreads((current) =>
+      sortThreadRows(
+        current.map((thread) => {
+          if (thread.id !== threadId) {
+            return thread;
+          }
+
+          return {
+            ...thread,
+            title:
+              changes.displayTitle !== undefined
+                ? changes.displayTitle ?? thread.sourceTitle
+                : thread.title,
+            isPinned: changes.isPinned ?? thread.isPinned
+          };
+        })
+      )
+    );
+  }
+
+  function applyTurnOverrideToState(turnId: string, changes: LocalOverrideInput) {
+    setTurns((current) =>
+      sortTurnRows(
+        current.map((turn) => {
+          if (turn.id !== turnId) {
+            return turn;
+          }
+
+          return {
+            ...turn,
+            displayTitle:
+              changes.displayTitle !== undefined ? changes.displayTitle : turn.displayTitle,
+            isPinned: changes.isPinned ?? turn.isPinned
+          };
+        })
+      )
+    );
+  }
+
+  function handleCancelThreadTitleEdit() {
+    setThreadTitleDraft(selectedThread?.title ?? "");
+    setIsThreadTitleEditing(false);
+  }
+
+  function handleCancelTurnTitleEdit() {
+    setTurnTitleDraft(selectedTurn?.displayTitle ?? "");
+    setIsTurnTitleEditing(false);
+  }
+
+  async function handleSaveThreadTitle() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    const nextDisplayTitle = resolveThreadDisplayTitleOverride(
+      threadTitleDraft,
+      selectedThread.sourceTitle
+    );
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        displayTitle: nextDisplayTitle
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        displayTitle: nextDisplayTitle
+      });
+      setIsThreadTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleResetThreadTitle() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        displayTitle: null
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        displayTitle: null
+      });
+      setIsThreadTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleToggleThreadPin() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    const nextPinned = !selectedThread.isPinned;
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        isPinned: nextPinned
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        isPinned: nextPinned
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleSaveTurnTitle() {
+    if (!selectedTurn) {
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    const nextDisplayTitle = resolveTurnDisplayTitleOverride(turnTitleDraft);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        displayTitle: nextDisplayTitle
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        displayTitle: nextDisplayTitle
+      });
+      setIsTurnTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  async function handleResetTurnTitle() {
+    if (!selectedTurn) {
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        displayTitle: null
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        displayTitle: null
+      });
+      setIsTurnTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  async function handleToggleTurnPin() {
+    if (!selectedTurn) {
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    const nextPinned = !selectedTurn.isPinned;
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        isPinned: nextPinned
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        isPinned: nextPinned
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
   }
 
   function handleDetailItemToggle(itemId: string) {
@@ -1212,7 +1494,12 @@ export default function App() {
                           onClick={() => handleThreadSelect(thread.id)}
                           type="button"
                         >
-                          {thread.title}
+                          <span className="sidebar-thread-row">
+                            <span className="sidebar-thread-title">{thread.title}</span>
+                            {thread.isPinned ? (
+                              <span className="sidebar-pin-badge">Pinned</span>
+                            ) : null}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -1296,7 +1583,12 @@ export default function App() {
                             onClick={() => handleThreadSelect(thread.id)}
                             type="button"
                           >
-                            {thread.title}
+                            <span className="sidebar-thread-row">
+                              <span className="sidebar-thread-title">{thread.title}</span>
+                              {thread.isPinned ? (
+                                <span className="sidebar-pin-badge">Pinned</span>
+                              ) : null}
+                            </span>
                           </button>
                         ))}
                       </div>
@@ -1341,7 +1633,10 @@ export default function App() {
                   onClick={() => handleThreadSelect(thread.id)}
                   type="button"
                 >
-                  <strong>{thread.title}</strong>
+                  <div className="sidebar-chat-heading">
+                    <strong>{thread.title}</strong>
+                    {thread.isPinned ? <span className="sidebar-pin-badge">Pinned</span> : null}
+                  </div>
                   <div className="sidebar-item-meta">
                     <span>{formatCountLabel(thread.turnCount, "turn")}</span>
                     <span>{formatDateTime(thread.updatedAt ?? thread.lastSeenAt)}</span>
@@ -1370,16 +1665,81 @@ export default function App() {
           <div className="thread-header">
             <div className="thread-header-copy">
               <p className="workspace-kicker">Thread</p>
-              <h2>{selectedThread?.title ?? "Selected thread"}</h2>
+              <div className="management-heading-row">
+                {selectedThread && isThreadTitleEditing ? (
+                  <input
+                    className="management-title-input"
+                    onChange={(event) => setThreadTitleDraft(event.target.value)}
+                    placeholder={selectedThread.sourceTitle}
+                    type="text"
+                    value={threadTitleDraft}
+                  />
+                ) : (
+                  <h2>{selectedThread?.title ?? "Selected thread"}</h2>
+                )}
+                {selectedThread?.isPinned ? <span className="pin-pill">Pinned</span> : null}
+              </div>
+              {selectedThread && selectedThread.title !== selectedThread.sourceTitle ? (
+                <p className="management-subcopy muted">{`Original: ${selectedThread.sourceTitle}`}</p>
+              ) : null}
             </div>
             {selectedThread ? (
-              <button
-                className="secondary-button"
-                onClick={() => void handleOpenCodexThread(selectedThread.id)}
-                type="button"
-              >
-                Open in Codex
-              </button>
+              <div className="thread-header-actions">
+                <button
+                  className={`secondary-button ${selectedThread.isPinned ? "is-active" : ""}`}
+                  disabled={isSavingThreadOverride}
+                  onClick={() => void handleToggleThreadPin()}
+                  type="button"
+                >
+                  {selectedThread.isPinned ? "Unpin" : "Pin"}
+                </button>
+                {isThreadTitleEditing ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      disabled={isSavingThreadOverride || !canSaveThreadTitle}
+                      onClick={() => void handleSaveThreadTitle()}
+                      type="button"
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={isSavingThreadOverride}
+                      onClick={handleCancelThreadTitleEdit}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="secondary-button"
+                    disabled={isSavingThreadOverride}
+                    onClick={() => setIsThreadTitleEditing(true)}
+                    type="button"
+                  >
+                    Edit title
+                  </button>
+                )}
+                {canResetThreadTitle ? (
+                  <button
+                    className="secondary-button"
+                    disabled={isSavingThreadOverride}
+                    onClick={() => void handleResetThreadTitle()}
+                    type="button"
+                  >
+                    Use original
+                  </button>
+                ) : null}
+                <button
+                  className="secondary-button"
+                  onClick={() => void handleOpenCodexThread(selectedThread.id)}
+                  type="button"
+                >
+                  Open in Codex
+                </button>
+              </div>
             ) : null}
           </div>
 
@@ -1433,13 +1793,16 @@ export default function App() {
                     <div className="selection-copy">
                       <div className="selection-topline">
                         <strong>{getTurnHeading(turn)}</strong>
-                        <span
-                          className={`status-pill ${
-                            turn.status === "completed" ? "is-complete" : "is-open"
-                          }`}
-                        >
-                          {turn.status}
-                        </span>
+                        <div className="selection-pills">
+                          {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                          <span
+                            className={`status-pill ${
+                              turn.status === "completed" ? "is-complete" : "is-open"
+                            }`}
+                          >
+                            {turn.status}
+                          </span>
+                        </div>
                       </div>
                       <p className="turn-preview">
                         <span className="preview-label">Q</span>
@@ -1484,7 +1847,10 @@ export default function App() {
                     type="button"
                   >
                     <div className="question-card-header">
-                      <strong>{`Turn ${turn.ordinal}`}</strong>
+                      <div className="question-card-heading">
+                        <strong>{getTurnHeading(turn)}</strong>
+                        {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                      </div>
                       <span className="mini-meta">
                         {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
                       </span>
@@ -2148,9 +2514,83 @@ export default function App() {
             <div className="modal-scroll">
               <div className="detail-body">
                 <section className="detail-meta-panel">
+                  <div className="detail-management-bar">
+                    <div className="detail-management-copy">
+                      <p className="management-kicker">Local turn title</p>
+                      {isTurnTitleEditing ? (
+                        <input
+                          className="management-title-input"
+                          onChange={(event) => setTurnTitleDraft(event.target.value)}
+                          placeholder="Leave blank to use the default turn heading"
+                          type="text"
+                          value={turnTitleDraft}
+                        />
+                      ) : (
+                        <strong className="detail-management-title">
+                          {selectedTurn.displayTitle ?? "Default turn heading"}
+                        </strong>
+                      )}
+                      <p className="management-subcopy muted">
+                        {selectedTurn.displayTitle
+                          ? `Original heading: Turn ${selectedTurn.ordinal}`
+                          : "No custom turn title stored."}
+                      </p>
+                    </div>
+                    <div className="detail-management-actions">
+                      <button
+                        className={`secondary-button ${selectedTurn.isPinned ? "is-active" : ""}`}
+                        disabled={isSavingTurnOverride}
+                        onClick={() => void handleToggleTurnPin()}
+                        type="button"
+                      >
+                        {selectedTurn.isPinned ? "Unpin" : "Pin"}
+                      </button>
+                      {isTurnTitleEditing ? (
+                        <>
+                          <button
+                            className="secondary-button"
+                            disabled={isSavingTurnOverride || !canSaveTurnTitle}
+                            onClick={() => void handleSaveTurnTitle()}
+                            type="button"
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="secondary-button"
+                            disabled={isSavingTurnOverride}
+                            onClick={handleCancelTurnTitleEdit}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingTurnOverride}
+                          onClick={() => setIsTurnTitleEditing(true)}
+                          type="button"
+                        >
+                          Edit title
+                        </button>
+                      )}
+                      {canResetTurnTitle ? (
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingTurnOverride}
+                          onClick={() => void handleResetTurnTitle()}
+                          type="button"
+                        >
+                          Use default
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
                   <div className="detail-meta-header">
                     <strong>{getTurnHeading(selectedTurn)}</strong>
                     <div className="detail-meta-pills">
+                      {selectedTurn.isPinned ? <span className="pin-pill">Pinned</span> : null}
                       <span
                         className={`status-pill ${
                           selectedTurn.status === "completed" ? "is-complete" : "is-open"

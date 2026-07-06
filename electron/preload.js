@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   openCodexThread(threadId) {
     return ipcRenderer.invoke("app:open-codex-thread", threadId);
   },
+  saveThreadOverride(threadId, changes) {
+    return ipcRenderer.invoke("app:save-thread-override", threadId, changes);
+  },
+  saveTurnOverride(turnId, changes) {
+    return ipcRenderer.invoke("app:save-turn-override", turnId, changes);
+  },
   updateCodexHome(codexHome) {
     return ipcRenderer.invoke("app:update-codex-home", codexHome);
   },

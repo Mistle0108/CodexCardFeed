@@ -4,6 +4,8 @@ function registerIpcHandlers({
   getShellInfo,
   importSessions,
   openCodexThread,
+  saveThreadOverride,
+  saveTurnOverride,
   updateCodexHome,
   resetCodexHome,
   updateDatabasePath,
@@ -25,6 +27,14 @@ function registerIpcHandlers({
 
   ipcMain.handle("app:open-codex-thread", (_event, threadId) => {
     return openCodexThread(threadId);
+  });
+
+  ipcMain.handle("app:save-thread-override", (_event, threadId, changes) => {
+    return saveThreadOverride(threadId, changes);
+  });
+
+  ipcMain.handle("app:save-turn-override", (_event, turnId, changes) => {
+    return saveTurnOverride(turnId, changes);
   });
 
   ipcMain.handle("app:update-codex-home", (_event, codexHome) => {

@@ -7,7 +7,9 @@ const {
   listProjects: listProjectRows,
   listThreads,
   listTurnsByThread,
-  listItemsByTurn
+  listItemsByTurn,
+  saveThreadOverride: persistThreadOverride,
+  saveTurnOverride: persistTurnOverride
 } = require("./db");
 const { runIntegrityCheck } = require("./integrity");
 const {
@@ -195,6 +197,12 @@ app.whenReady().then(() => {
     },
     openCodexThread(threadId) {
       return openCodexThread(threadId);
+    },
+    saveThreadOverride(threadId, changes) {
+      return persistThreadOverride(databaseState.database, threadId, changes);
+    },
+    saveTurnOverride(turnId, changes) {
+      return persistTurnOverride(databaseState.database, turnId, changes);
     },
     updateCodexHome(codexHome) {
       return updateCodexHome(codexHome);
