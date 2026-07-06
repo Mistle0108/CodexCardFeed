@@ -1,3 +1,10 @@
+const {
+  compareAndStoreSnapshot,
+  stableStringify
+} = require("./diagnostic-snapshots");
+
+const INTEGRITY_SNAPSHOT_KEY = "diagnostic_snapshot.integrity_check";
+
 function runQuery(database, sql, ...params) {
   return database.prepare(sql).all(...params);
 }
@@ -5,6 +12,7 @@ function runQuery(database, sql, ...params) {
 function createSampleRef(label, options = {}) {
   return {
     label,
+    isNew: false,
     threadId: options.threadId ?? null,
     turnId: options.turnId ?? null
   };
@@ -28,6 +36,9 @@ function createCheckResult({
   severity,
   affectedCount,
   sampleRefs,
+  issueDetails = [],
+  issueRefs = [],
+  newAffectedCount = 0,
   passMessage,
   failMessage
 }) {
@@ -40,24 +51,32 @@ function createCheckResult({
     severity,
     status: hasIssues ? "fail" : "pass",
     affectedCount,
+    newAffectedCount,
     sampleRefs: hasIssues ? sampleRefs : [],
+    issueDetails,
+    issueRefs,
     message: hasIssues ? failMessage(affectedCount) : passMessage
   };
 }
 
 function createQueryCheck(database, definition) {
   const rows = runQuery(database, definition.sql, ...(definition.params ?? []));
-  const sampleRefs = rows
-    .slice(0, definition.sampleLimit ?? 5)
-    .map((row) => definition.mapSampleRef(row));
+  const issueDetails = rows.map((row) => ({
+    issueRef: definition.mapIssueRef ? definition.mapIssueRef(row) : stableStringify(row),
+    sampleRef: definition.mapSampleRef(row)
+  }));
 
   return createCheckResult({
     key: definition.key,
     label: definition.label,
     description: definition.description,
     severity: definition.severity,
-    affectedCount: rows.length,
-    sampleRefs,
+    affectedCount: issueDetails.length,
+    issueDetails,
+    issueRefs: issueDetails.map((detail) => detail.issueRef),
+    sampleRefs: issueDetails
+      .slice(0, definition.sampleLimit ?? 5)
+      .map((detail) => detail.sampleRef),
     passMessage: definition.passMessage,
     failMessage: definition.failMessage
   });
@@ -75,6 +94,8 @@ function createOrdinalContinuityCheck({
   let expectedOrdinal = 1;
   let affectedCount = 0;
   const sampleRefs = [];
+  const issueDetails = [];
+  const issueRefs = [];
 
   for (const row of rows) {
     const parentId = row[parentKey];
@@ -87,14 +108,16 @@ function createOrdinalContinuityCheck({
 
     if (ordinal !== expectedOrdinal) {
       affectedCount += 1;
+      const issueRef = `${parentId}:${expectedOrdinal}:${ordinal}`;
+      const sampleRef = createThreadSampleRef(
+        parentId,
+        `${parentId}: expected ${expectedOrdinal}, found ${ordinal}`
+      );
+      issueRefs.push(issueRef);
+      issueDetails.push({ issueRef, sampleRef });
 
       if (sampleRefs.length < 5) {
-        sampleRefs.push(
-          createThreadSampleRef(
-            parentId,
-            `${parentId}: expected ${expectedOrdinal}, found ${ordinal}`
-          )
-        );
+        sampleRefs.push(sampleRef);
       }
 
       expectedOrdinal = ordinal + 1;
@@ -110,6 +133,8 @@ function createOrdinalContinuityCheck({
     description,
     severity: "warning",
     affectedCount,
+    issueDetails,
+    issueRefs,
     sampleRefs,
     passMessage: "Ordinals are contiguous.",
     failMessage(count) {
@@ -572,7 +597,41 @@ function buildIntegrityChecks(database) {
 
 function runIntegrityCheck(database) {
   const checks = buildIntegrityChecks(database);
-  const failedChecks = checks.filter((check) => check.status === "fail");
+  const snapshotResult = compareAndStoreSnapshot(
+    database,
+    INTEGRITY_SNAPSHOT_KEY,
+    Object.fromEntries(checks.map((check) => [check.key, check.issueRefs]))
+  );
+  const checksWithNewCounts = checks.map((check) => {
+    const newIssueRefs = snapshotResult.hasBaseline
+      ? new Set(snapshotResult.newRefs[check.key] ?? [])
+      : new Set();
+    const newAffectedCount = snapshotResult.hasBaseline
+      ? snapshotResult.newCounts[check.key] ?? 0
+      : 0;
+    const sampleRefs =
+      newAffectedCount > 0
+        ? check.issueDetails
+            .filter((detail) => newIssueRefs.has(detail.issueRef))
+            .map((detail) => ({
+              ...detail.sampleRef,
+              isNew: true
+            }))
+        : check.sampleRefs;
+
+    return {
+      key: check.key,
+      label: check.label,
+      description: check.description,
+      severity: check.severity,
+      status: check.status,
+      affectedCount: check.affectedCount,
+      newAffectedCount,
+      sampleRefs,
+      message: check.message
+    };
+  });
+  const failedChecks = checksWithNewCounts.filter((check) => check.status === "fail");
   const errorCount = failedChecks.filter((check) => check.severity === "error").length;
   const warningCount = failedChecks.filter((check) => check.severity === "warning").length;
 
@@ -582,10 +641,11 @@ function runIntegrityCheck(database) {
       totalChecks: checks.length,
       passedChecks: checks.length - failedChecks.length,
       failedChecks: failedChecks.length,
+      newIssueCount: snapshotResult.hasBaseline ? snapshotResult.totalNewCount : 0,
       errorCount,
       warningCount
     },
-    checks
+    checks: checksWithNewCounts
   };
 }
 

@@ -145,6 +145,7 @@ type TurnItem = {
 
 type IntegritySampleRef = {
   label: string;
+  isNew: boolean;
   threadId: string | null;
   turnId: string | null;
 };
@@ -156,6 +157,7 @@ type IntegrityCheckResult = {
   severity: "error" | "warning";
   status: "pass" | "fail";
   affectedCount: number;
+  newAffectedCount: number;
   sampleRefs: IntegritySampleRef[];
   message: string;
 };
@@ -166,6 +168,7 @@ type IntegrityReport = {
     totalChecks: number;
     passedChecks: number;
     failedChecks: number;
+    newIssueCount: number;
     errorCount: number;
     warningCount: number;
   };
@@ -198,10 +201,15 @@ type SessionDiagnosisReport = {
     trackedFiles: number;
     dbThreads: number;
     duplicateCount: number;
+    newDuplicateCount: number;
     importGapCount: number;
+    newImportGapCount: number;
     sourceProblemCount: number;
+    newSourceProblemCount: number;
     parseProblemCount: number;
+    newParseProblemCount: number;
     totalIssueCount: number;
+    newTotalIssueCount: number;
   };
   duplicates: SessionDiagnosisIssue[];
   importGaps: SessionDiagnosisIssue[];

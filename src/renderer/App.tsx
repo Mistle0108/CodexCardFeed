@@ -29,6 +29,10 @@ function formatInteger(value: number) {
   return integerFormatter.format(value);
 }
 
+function formatTotalAndNewLabel(totalCount: number, newCount: number, singular: string) {
+  return `${formatCountLabel(totalCount, singular)} / ${formatCountLabel(newCount, `new ${singular}`)}`;
+}
+
 function formatTokenLabel(value: number) {
   return `${formatInteger(value)} tok`;
 }
@@ -568,6 +572,9 @@ export default function App() {
   );
   const [isAdditionalItemsVisible, setIsAdditionalItemsVisible] = useState(false);
   const [expandedDetailItemIds, setExpandedDetailItemIds] = useState<Record<string, boolean>>({});
+  const [expandedIntegrityReferenceKeys, setExpandedIntegrityReferenceKeys] = useState<
+    Record<string, boolean>
+  >({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isProjectsCollapsed, setIsProjectsCollapsed] = useState(() =>
     readStoredCollapsedState(PROJECTS_COLLAPSED_STORAGE_KEY)
@@ -792,6 +799,10 @@ export default function App() {
   }, [selectedTurnId, isTurnModalOpen]);
 
   useEffect(() => {
+    setExpandedIntegrityReferenceKeys({});
+  }, [integrityReport?.checkedAt]);
+
+  useEffect(() => {
     if (isDiagnosticsModalOpen || rightPanelMode !== "turns" || !selectedTurnId) {
       return;
     }
@@ -862,6 +873,13 @@ export default function App() {
     setExpandedDetailItemIds((current) => ({
       ...current,
       [itemId]: !current[itemId]
+    }));
+  }
+
+  function handleIntegrityReferenceToggle(checkKey: string) {
+    setExpandedIntegrityReferenceKeys((current) => ({
+      ...current,
+      [checkKey]: !current[checkKey]
     }));
   }
 
@@ -1534,6 +1552,10 @@ export default function App() {
                         <dd>{formatInteger(integrityReport.summary.failedChecks)}</dd>
                       </div>
                       <div>
+                        <dt>New issues</dt>
+                        <dd>{formatInteger(integrityReport.summary.newIssueCount)}</dd>
+                      </div>
+                      <div>
                         <dt>Errors</dt>
                         <dd>{formatInteger(integrityReport.summary.errorCount)}</dd>
                       </div>
@@ -1554,63 +1576,113 @@ export default function App() {
                     <div className="integrity-section-header">
                       <strong>Issues</strong>
                       <span className="mini-meta">
-                        {formatCountLabel(integrityFailedChecks.length, "check")}
+                        {formatTotalAndNewLabel(
+                          integrityFailedChecks.length,
+                          integrityReport.summary.newIssueCount,
+                          "check"
+                        )}
                       </span>
                     </div>
 
                     {integrityFailedChecks.length ? (
                       <div className="integrity-check-list">
-                        {integrityFailedChecks.map((check) => (
-                          <article className="integrity-check-card" key={check.key}>
-                            <div className="integrity-check-header">
-                              <div>
-                                <strong>{check.label}</strong>
-                                <p className="integrity-check-description">
-                                  {check.description}
-                                </p>
-                              </div>
-                              <div className="integrity-check-pills">
-                                <span
-                                  className={`integrity-severity-pill ${
-                                    check.severity === "error" ? "is-error" : "is-warning"
-                                  }`}
-                                >
-                                  {check.severity}
-                                </span>
-                                <span className="count-pill">
-                                  {formatInteger(check.affectedCount)}
-                                </span>
-                              </div>
-                            </div>
-                            <p className="integrity-check-message">{check.message}</p>
-                            {check.sampleRefs.length ? (
-                              <ul className="integrity-sample-list">
-                                {check.sampleRefs.map((sampleRef) => (
-                                  <li
-                                    key={[
-                                      check.key,
-                                      sampleRef.label,
-                                      sampleRef.threadId ?? "none",
-                                      sampleRef.turnId ?? "none"
-                                    ].join(":")}
+                        {integrityFailedChecks.map((check) => {
+                          const hasNewReferences = check.newAffectedCount > 0;
+                          const isReferenceListExpanded =
+                            expandedIntegrityReferenceKeys[check.key] === true;
+                          const visibleSampleRefs =
+                            hasNewReferences && !isReferenceListExpanded
+                              ? check.sampleRefs.slice(0, 5)
+                              : check.sampleRefs;
+                          const shouldShowReferenceToggle =
+                            hasNewReferences && check.sampleRefs.length > 5;
+
+                          return (
+                            <article className="integrity-check-card" key={check.key}>
+                              <div className="integrity-check-header">
+                                <div>
+                                  <strong>{check.label}</strong>
+                                  <p className="integrity-check-description">
+                                    {check.description}
+                                  </p>
+                                </div>
+                                <div className="integrity-check-pills">
+                                  <span
+                                    className={`integrity-severity-pill ${
+                                      check.severity === "error" ? "is-error" : "is-warning"
+                                    }`}
                                   >
-                                    {sampleRef.threadId ? (
-                                      <button
-                                        className="integrity-sample-link"
-                                        onClick={() => handleOpenIntegritySample(sampleRef)}
-                                        type="button"
+                                    {check.severity}
+                                  </span>
+                                  <span className="count-pill">
+                                    {`Total ${formatInteger(check.affectedCount)}`}
+                                  </span>
+                                  <span className="count-pill count-pill-new">
+                                    {`New ${formatInteger(check.newAffectedCount)}`}
+                                  </span>
+                                </div>
+                              </div>
+                              <p className="integrity-check-message">{check.message}</p>
+                              {check.sampleRefs.length ? (
+                                <div className="integrity-reference-block">
+                                  <p className="mini-meta integrity-reference-label">
+                                    {hasNewReferences
+                                      ? `${formatCountLabel(
+                                          check.newAffectedCount,
+                                          "new reference"
+                                        )} shown first`
+                                      : "Sample references"}
+                                  </p>
+                                  <ul className="integrity-sample-list">
+                                    {visibleSampleRefs.map((sampleRef) => (
+                                      <li
+                                        key={[
+                                          check.key,
+                                          sampleRef.label,
+                                          sampleRef.threadId ?? "none",
+                                          sampleRef.turnId ?? "none"
+                                        ].join(":")}
                                       >
-                                        {sampleRef.label}
-                                      </button>
-                                    ) : (
-                                      <span>{sampleRef.label}</span>
-                                    )}
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : null}
-                          </article>
-                        ))}
+                                        {sampleRef.threadId ? (
+                                          <button
+                                            className={`integrity-sample-link ${
+                                              sampleRef.isNew ? "is-new" : ""
+                                            }`}
+                                            onClick={() => handleOpenIntegritySample(sampleRef)}
+                                            type="button"
+                                          >
+                                            {sampleRef.label}
+                                          </button>
+                                        ) : (
+                                          <span
+                                            className={
+                                              sampleRef.isNew ? "integrity-sample-text is-new" : undefined
+                                            }
+                                          >
+                                            {sampleRef.label}
+                                          </span>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {shouldShowReferenceToggle ? (
+                                    <button
+                                      className="detail-expand-toggle integrity-reference-toggle"
+                                      onClick={() => handleIntegrityReferenceToggle(check.key)}
+                                      type="button"
+                                    >
+                                      {isReferenceListExpanded
+                                        ? "Show less"
+                                        : `Show more (${formatInteger(
+                                            check.sampleRefs.length - 5
+                                          )})`}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </article>
+                          );
+                        })}
                       </div>
                     ) : (
                       <p className="empty-state integrity-empty-state">
@@ -1671,6 +1743,10 @@ export default function App() {
                           <dd>{formatInteger(sessionDiagnosisReport.summary.totalIssueCount)}</dd>
                         </div>
                         <div>
+                          <dt>New issues</dt>
+                          <dd>{formatInteger(sessionDiagnosisReport.summary.newTotalIssueCount)}</dd>
+                        </div>
+                        <div>
                           <dt>Import gaps</dt>
                           <dd>{formatInteger(sessionDiagnosisReport.summary.importGapCount)}</dd>
                         </div>
@@ -1703,7 +1779,11 @@ export default function App() {
                     <div className="diagnosis-section-header">
                       <strong>Import gaps</strong>
                       <span className="mini-meta">
-                        {formatCountLabel(sessionDiagnosisReport.importGaps.length, "issue")}
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.importGaps.length,
+                          sessionDiagnosisReport.summary.newImportGapCount,
+                          "issue"
+                        )}
                       </span>
                     </div>
 
@@ -1780,7 +1860,11 @@ export default function App() {
                     <div className="diagnosis-section-header">
                       <strong>Duplicate conflicts</strong>
                       <span className="mini-meta">
-                        {formatCountLabel(sessionDiagnosisReport.duplicates.length, "issue")}
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.duplicates.length,
+                          sessionDiagnosisReport.summary.newDuplicateCount,
+                          "issue"
+                        )}
                       </span>
                     </div>
 
@@ -1845,7 +1929,11 @@ export default function App() {
                     <div className="diagnosis-section-header">
                       <strong>Source problems</strong>
                       <span className="mini-meta">
-                        {formatCountLabel(sessionDiagnosisReport.sourceProblems.length, "issue")}
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.sourceProblems.length,
+                          sessionDiagnosisReport.summary.newSourceProblemCount,
+                          "issue"
+                        )}
                       </span>
                     </div>
 
@@ -1922,7 +2010,11 @@ export default function App() {
                     <div className="diagnosis-section-header">
                       <strong>Parse problems</strong>
                       <span className="mini-meta">
-                        {formatCountLabel(sessionDiagnosisReport.parseProblems.length, "issue")}
+                        {formatTotalAndNewLabel(
+                          sessionDiagnosisReport.parseProblems.length,
+                          sessionDiagnosisReport.summary.newParseProblemCount,
+                          "issue"
+                        )}
                       </span>
                     </div>
 

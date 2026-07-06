@@ -2,11 +2,13 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { compareAndStoreSnapshot, stableStringify } = require("./diagnostic-snapshots");
 
 const IMPORTER_LAYOUT_VERSION = 3;
 const IMPORTER_LAYOUT_VERSION_KEY = "codex_card_feed_importer_layout_version";
 const SESSION_INDEX_SIGNATURE_KEY = "codex_card_feed_session_index_signature";
 const GLOBAL_STATE_SIGNATURE_KEY = "codex_card_feed_global_state_signature";
+const SESSION_DIAGNOSIS_SNAPSHOT_KEY = "diagnostic_snapshot.session_diagnosis";
 const SOURCE_FILE_STATUS_ACTIVE = "active";
 const SOURCE_FILE_STATUS_MISSING = "missing";
 const SOURCE_FILE_STATUS_ERROR = "error";
@@ -2488,20 +2490,46 @@ function createDiagnosisIssue({
   };
 }
 
-function buildSessionDiagnosisSummary(report, counts) {
+function createDiagnosisIssueRef(issue) {
+  return stableStringify({
+    code: issue.code,
+    category: issue.category,
+    sourcePath: issue.sourcePath,
+    parsedThreadId: issue.parsedThreadId,
+    trackedThreadId: issue.trackedThreadId,
+    trackedStatus: issue.trackedStatus,
+    relatedSourcePaths: [...issue.relatedSourcePaths].sort(),
+    relatedThreadIds: [...issue.relatedThreadIds].sort()
+  });
+}
+
+function buildSessionDiagnosisSummary(report, counts, snapshotResult) {
   return {
     scannedFiles: counts.scannedFiles,
     trackedFiles: counts.trackedFiles,
     dbThreads: counts.dbThreads,
     duplicateCount: report.duplicates.length,
+    newDuplicateCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.duplicates ?? 0
+      : 0,
     importGapCount: report.importGaps.length,
+    newImportGapCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.importGaps ?? 0
+      : 0,
     sourceProblemCount: report.sourceProblems.length,
+    newSourceProblemCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.sourceProblems ?? 0
+      : 0,
     parseProblemCount: report.parseProblems.length,
+    newParseProblemCount: snapshotResult?.hasBaseline
+      ? snapshotResult.newCounts.parseProblems ?? 0
+      : 0,
     totalIssueCount:
       report.duplicates.length +
       report.importGaps.length +
       report.sourceProblems.length +
-      report.parseProblems.length
+      report.parseProblems.length,
+    newTotalIssueCount: snapshotResult?.hasBaseline ? snapshotResult.totalNewCount : 0
   };
 }
 
@@ -2770,11 +2798,26 @@ function runSessionDiagnosis(database, options = {}) {
     );
   }
 
-  report.summary = buildSessionDiagnosisSummary(report, {
-    scannedFiles: files.length,
-    trackedFiles: trackedSourceFiles.size,
-    dbThreads: threadRows.length
-  });
+  const snapshotResult = compareAndStoreSnapshot(
+    database,
+    SESSION_DIAGNOSIS_SNAPSHOT_KEY,
+    {
+      duplicates: report.duplicates.map((issue) => createDiagnosisIssueRef(issue)),
+      importGaps: report.importGaps.map((issue) => createDiagnosisIssueRef(issue)),
+      sourceProblems: report.sourceProblems.map((issue) => createDiagnosisIssueRef(issue)),
+      parseProblems: report.parseProblems.map((issue) => createDiagnosisIssueRef(issue))
+    }
+  );
+
+  report.summary = buildSessionDiagnosisSummary(
+    report,
+    {
+      scannedFiles: files.length,
+      trackedFiles: trackedSourceFiles.size,
+      dbThreads: threadRows.length
+    },
+    snapshotResult
+  );
 
   return report;
 }

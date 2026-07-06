@@ -774,6 +774,11 @@ select {
   color: #223045;
 }
 
+.count-pill-new {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2d6cbe;
+}
+
 .status-pill {
   padding: 3px 8px;
   font-size: 0.7rem;
@@ -1262,7 +1267,7 @@ select {
 .integrity-summary-grid {
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
@@ -1358,6 +1363,15 @@ select {
   line-height: 1.45;
 }
 
+.integrity-reference-block {
+  display: grid;
+  gap: 8px;
+}
+
+.integrity-reference-label {
+  margin: 0;
+}
+
 .integrity-sample-list li + li {
   margin-top: 4px;
 }
@@ -1375,9 +1389,19 @@ select {
   cursor: pointer;
 }
 
+.integrity-sample-link.is-new,
+.integrity-sample-text.is-new {
+  color: #1d548f;
+  font-weight: 700;
+}
+
 .integrity-sample-link:hover {
   color: #1d548f;
   text-decoration-color: rgba(29, 84, 143, 0.44);
+}
+
+.integrity-reference-toggle {
+  justify-self: start;
 }
 
 .integrity-empty-state {
@@ -1401,7 +1425,7 @@ select {
 .diagnosis-summary-grid {
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
