@@ -387,6 +387,8 @@ function listThreads(database, projectId = null) {
         threads.project_id,
         projects.display_name AS project_display_name,
         COALESCE(thread_overrides.display_title, threads.title) AS display_title,
+        thread_overrides.tags_json,
+        thread_overrides.notes,
         threads.title AS source_title,
         threads.preview,
         threads.source_cwd,
@@ -409,6 +411,8 @@ function listThreads(database, projectId = null) {
         threads.project_id,
         projects.display_name,
         thread_overrides.display_title,
+        thread_overrides.tags_json,
+        thread_overrides.notes,
         threads.title,
         threads.preview,
         threads.source_cwd,
@@ -426,6 +430,8 @@ function listThreads(database, projectId = null) {
       projectId: row.project_id,
       projectDisplayName: row.project_display_name ?? null,
       title: row.display_title,
+      tags: parseOverrideTagsJson(row.tags_json),
+      notes: typeof row.notes === "string" ? row.notes : "",
       sourceTitle: row.source_title,
       preview: row.preview,
       sourceCwd: row.source_cwd,
@@ -450,6 +456,8 @@ function listTurnsByThread(database, threadId) {
         turns.thread_id,
         turns.ordinal,
         turn_overrides.display_title,
+        turn_overrides.tags_json,
+        turn_overrides.notes,
         turns.first_user_snippet,
         (
           SELECT assistant_items.text_content
@@ -489,6 +497,8 @@ function listTurnsByThread(database, threadId) {
         turns.thread_id,
         turns.ordinal,
         turn_overrides.display_title,
+        turn_overrides.tags_json,
+        turn_overrides.notes,
         turns.first_user_snippet,
         turns.status,
         turns.started_at,
@@ -510,6 +520,8 @@ function listTurnsByThread(database, threadId) {
       threadId: row.thread_id,
       ordinal: Number(row.ordinal),
       displayTitle: row.display_title || null,
+      tags: parseOverrideTagsJson(row.tags_json),
+      notes: typeof row.notes === "string" ? row.notes : "",
       firstUserSnippet: row.first_user_snippet,
       firstAssistantSnippet: row.first_assistant_snippet ?? "",
       status: row.status,
@@ -585,6 +597,92 @@ function normalizeOverridePinnedValue(isPinned, label) {
   return isPinned ? 1 : 0;
 }
 
+function parseOverrideTagsJson(tagsJson) {
+  if (typeof tagsJson !== "string" || !tagsJson.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(tagsJson);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const seen = new Set();
+    const normalized = [];
+
+    for (const value of parsed) {
+      if (typeof value !== "string") {
+        continue;
+      }
+
+      const trimmed = value.trim();
+
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+
+      seen.add(trimmed);
+      normalized.push(trimmed);
+    }
+
+    return normalized;
+  } catch {
+    return [];
+  }
+}
+
+function normalizeOverrideTagsValue(tags, label) {
+  if (tags === undefined) {
+    return undefined;
+  }
+
+  if (tags === null) {
+    return "[]";
+  }
+
+  if (!Array.isArray(tags)) {
+    throw new Error(`${label} must be an array or null.`);
+  }
+
+  const normalized = [];
+  const seen = new Set();
+
+  for (const value of tags) {
+    if (typeof value !== "string") {
+      throw new Error(`${label} values must be strings.`);
+    }
+
+    const trimmed = value.trim();
+
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return JSON.stringify(normalized);
+}
+
+function normalizeOverrideNotesValue(notes, label) {
+  if (notes === undefined) {
+    return undefined;
+  }
+
+  if (notes === null) {
+    return "";
+  }
+
+  if (typeof notes !== "string") {
+    throw new Error(`${label} must be a string or null.`);
+  }
+
+  return notes.trim();
+}
+
 function saveThreadOverride(database, threadId, changes) {
   if (typeof threadId !== "string" || !threadId.trim()) {
     throw new Error("Thread ID cannot be empty.");
@@ -605,8 +703,15 @@ function saveThreadOverride(database, threadId, changes) {
     "Thread display title"
   );
   const nextPinned = normalizeOverridePinnedValue(changes.isPinned, "Thread pin state");
+  const nextTagsJson = normalizeOverrideTagsValue(changes.tags, "Thread tags");
+  const nextNotes = normalizeOverrideNotesValue(changes.notes, "Thread notes");
 
-  if (nextDisplayTitle === undefined && nextPinned === undefined) {
+  if (
+    nextDisplayTitle === undefined &&
+    nextPinned === undefined &&
+    nextTagsJson === undefined &&
+    nextNotes === undefined
+  ) {
     return;
   }
 
@@ -623,12 +728,25 @@ function saveThreadOverride(database, threadId, changes) {
     .get(threadId);
   const resolvedDisplayTitle =
     nextDisplayTitle !== undefined ? nextDisplayTitle : existingOverride?.display_title ?? null;
-  const resolvedPinned = nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
+  const resolvedPinned =
+    nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
   const resolvedTagsJson =
-    typeof existingOverride?.tags_json === "string" ? existingOverride.tags_json : "[]";
-  const resolvedNotes = typeof existingOverride?.notes === "string" ? existingOverride.notes : "";
+    nextTagsJson !== undefined
+      ? nextTagsJson
+      : JSON.stringify(parseOverrideTagsJson(existingOverride?.tags_json));
+  const resolvedNotes =
+    nextNotes !== undefined
+      ? nextNotes
+      : typeof existingOverride?.notes === "string"
+        ? existingOverride.notes.trim()
+        : "";
 
-  if (resolvedDisplayTitle === null && resolvedPinned === 0 && resolvedTagsJson === "[]" && !resolvedNotes) {
+  if (
+    resolvedDisplayTitle === null &&
+    resolvedPinned === 0 &&
+    resolvedTagsJson === "[]" &&
+    !resolvedNotes
+  ) {
     database.prepare("DELETE FROM thread_overrides WHERE thread_id = ?").run(threadId);
     return;
   }
@@ -681,8 +799,15 @@ function saveTurnOverride(database, turnId, changes) {
     "Turn display title"
   );
   const nextPinned = normalizeOverridePinnedValue(changes.isPinned, "Turn pin state");
+  const nextTagsJson = normalizeOverrideTagsValue(changes.tags, "Turn tags");
+  const nextNotes = normalizeOverrideNotesValue(changes.notes, "Turn notes");
 
-  if (nextDisplayTitle === undefined && nextPinned === undefined) {
+  if (
+    nextDisplayTitle === undefined &&
+    nextPinned === undefined &&
+    nextTagsJson === undefined &&
+    nextNotes === undefined
+  ) {
     return;
   }
 
@@ -699,12 +824,25 @@ function saveTurnOverride(database, turnId, changes) {
     .get(turnId);
   const resolvedDisplayTitle =
     nextDisplayTitle !== undefined ? nextDisplayTitle : existingOverride?.display_title ?? null;
-  const resolvedPinned = nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
+  const resolvedPinned =
+    nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
   const resolvedTagsJson =
-    typeof existingOverride?.tags_json === "string" ? existingOverride.tags_json : "[]";
-  const resolvedNotes = typeof existingOverride?.notes === "string" ? existingOverride.notes : "";
+    nextTagsJson !== undefined
+      ? nextTagsJson
+      : JSON.stringify(parseOverrideTagsJson(existingOverride?.tags_json));
+  const resolvedNotes =
+    nextNotes !== undefined
+      ? nextNotes
+      : typeof existingOverride?.notes === "string"
+        ? existingOverride.notes.trim()
+        : "";
 
-  if (resolvedDisplayTitle === null && resolvedPinned === 0 && resolvedTagsJson === "[]" && !resolvedNotes) {
+  if (
+    resolvedDisplayTitle === null &&
+    resolvedPinned === 0 &&
+    resolvedTagsJson === "[]" &&
+    !resolvedNotes
+  ) {
     database.prepare("DELETE FROM turn_overrides WHERE turn_id = ?").run(turnId);
     return;
   }

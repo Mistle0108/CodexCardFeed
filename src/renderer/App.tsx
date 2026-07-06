@@ -193,6 +193,40 @@ function resolveTurnDisplayTitleOverride(draftValue: string) {
   return normalizedDraft || null;
 }
 
+function normalizeTagList(values: string[]) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const value of values) {
+    const trimmed = value.trim();
+
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
+function normalizeNoteDraft(value: string) {
+  return value.trim();
+}
+
+function areStringListsEqual(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => value === right[index]);
+}
+
+function appendTagDraft(currentTags: string[], draftValue: string) {
+  return normalizeTagList([...currentTags, ...draftValue.split(/[,\n]/g)]);
+}
+
 function getQuestionPreview(turn: TurnListItem) {
   return turn.firstUserSnippet.trim() || "No stored user message yet.";
 }
@@ -631,8 +665,16 @@ export default function App() {
   );
   const [isThreadTitleEditing, setIsThreadTitleEditing] = useState(false);
   const [threadTitleDraft, setThreadTitleDraft] = useState("");
+  const [isThreadMetadataCollapsed, setIsThreadMetadataCollapsed] = useState(false);
+  const [threadTagInputDraft, setThreadTagInputDraft] = useState("");
+  const [threadTagsDraft, setThreadTagsDraft] = useState<string[]>([]);
+  const [threadNotesDraft, setThreadNotesDraft] = useState("");
   const [isTurnTitleEditing, setIsTurnTitleEditing] = useState(false);
   const [turnTitleDraft, setTurnTitleDraft] = useState("");
+  const [isTurnMetadataCollapsed, setIsTurnMetadataCollapsed] = useState(false);
+  const [turnTagInputDraft, setTurnTagInputDraft] = useState("");
+  const [turnTagsDraft, setTurnTagsDraft] = useState<string[]>([]);
+  const [turnNotesDraft, setTurnNotesDraft] = useState("");
   const [isSavingThreadOverride, setIsSavingThreadOverride] = useState(false);
   const [isSavingTurnOverride, setIsSavingTurnOverride] = useState(false);
   const [isAdditionalItemsVisible, setIsAdditionalItemsVisible] = useState(false);
@@ -693,6 +735,8 @@ export default function App() {
   const allProjectIds = new Set(projects.map((project) => project.id));
   const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
   const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const normalizedThreadNotesDraft = normalizeNoteDraft(threadNotesDraft);
+  const normalizedTurnNotesDraft = normalizeNoteDraft(turnNotesDraft);
   const canSaveCodexHome = Boolean(
     shellInfo && codexHomeDraft.trim() && codexHomeDraft.trim() !== shellInfo.codexHome
   );
@@ -711,6 +755,22 @@ export default function App() {
     selectedTurn && turnTitleDraft.trim() !== (selectedTurn.displayTitle ?? "")
   );
   const canResetTurnTitle = Boolean(selectedTurn?.displayTitle);
+  const canAddThreadTag = Boolean(
+    threadTagInputDraft.trim() &&
+      !threadTagsDraft.includes(threadTagInputDraft.trim())
+  );
+  const canSaveThreadMemo = Boolean(
+    selectedThread && normalizedThreadNotesDraft !== selectedThread.notes
+  );
+  const canClearThreadMemo = Boolean(selectedThread?.notes);
+  const canAddTurnTag = Boolean(
+    turnTagInputDraft.trim() &&
+      !turnTagsDraft.includes(turnTagInputDraft.trim())
+  );
+  const canSaveTurnMemo = Boolean(
+    selectedTurn && normalizedTurnNotesDraft !== selectedTurn.notes
+  );
+  const canClearTurnMemo = Boolean(selectedTurn?.notes);
   const threadsByProjectId = projectThreads.reduce<Record<string, ThreadListItem[]>>(
     (groups, thread) => {
       if (!groups[thread.projectId]) {
@@ -891,12 +951,18 @@ export default function App() {
   useEffect(() => {
     setIsThreadTitleEditing(false);
     setThreadTitleDraft(selectedThread?.title ?? "");
-  }, [selectedThread?.id, selectedThread?.title]);
+    setThreadTagInputDraft("");
+    setThreadTagsDraft(selectedThread?.tags ?? []);
+    setThreadNotesDraft(selectedThread?.notes ?? "");
+  }, [selectedThread?.id, selectedThread?.title, selectedThread?.notes, selectedThread?.tags]);
 
   useEffect(() => {
     setIsTurnTitleEditing(false);
     setTurnTitleDraft(selectedTurn?.displayTitle ?? "");
-  }, [selectedTurn?.id, selectedTurn?.displayTitle]);
+    setTurnTagInputDraft("");
+    setTurnTagsDraft(selectedTurn?.tags ?? []);
+    setTurnNotesDraft(selectedTurn?.notes ?? "");
+  }, [selectedTurn?.id, selectedTurn?.displayTitle, selectedTurn?.notes, selectedTurn?.tags]);
 
   useEffect(() => {
     setExpandedIntegrityReferenceKeys({});
@@ -983,7 +1049,9 @@ export default function App() {
               changes.displayTitle !== undefined
                 ? changes.displayTitle ?? thread.sourceTitle
                 : thread.title,
-            isPinned: changes.isPinned ?? thread.isPinned
+            isPinned: changes.isPinned ?? thread.isPinned,
+            tags: changes.tags !== undefined ? changes.tags ?? [] : thread.tags,
+            notes: changes.notes !== undefined ? changes.notes ?? "" : thread.notes
           };
         })
       )
@@ -1002,7 +1070,9 @@ export default function App() {
             ...turn,
             displayTitle:
               changes.displayTitle !== undefined ? changes.displayTitle : turn.displayTitle,
-            isPinned: changes.isPinned ?? turn.isPinned
+            isPinned: changes.isPinned ?? turn.isPinned,
+            tags: changes.tags !== undefined ? changes.tags ?? [] : turn.tags,
+            notes: changes.notes !== undefined ? changes.notes ?? "" : turn.notes
           };
         })
       )
@@ -1014,9 +1084,147 @@ export default function App() {
     setIsThreadTitleEditing(false);
   }
 
+  async function handleAddThreadTag() {
+    if (!selectedThread || !threadTagInputDraft.trim()) {
+      return;
+    }
+
+    const nextTags = appendTagDraft(threadTagsDraft, threadTagInputDraft);
+
+    if (areStringListsEqual(nextTags, threadTagsDraft)) {
+      setThreadTagInputDraft("");
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        tags: nextTags
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        tags: nextTags
+      });
+      setThreadTagInputDraft("");
+      setThreadTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleRemoveThreadTag(tagToRemove: string) {
+    if (!selectedThread) {
+      return;
+    }
+
+    const nextTags = threadTagsDraft.filter((tag) => tag !== tagToRemove);
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        tags: nextTags
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        tags: nextTags
+      });
+      setThreadTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  function handleThreadTagInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    void handleAddThreadTag();
+  }
+
+  function handleResetThreadMemoDraft() {
+    setThreadNotesDraft(selectedThread?.notes ?? "");
+  }
+
   function handleCancelTurnTitleEdit() {
     setTurnTitleDraft(selectedTurn?.displayTitle ?? "");
     setIsTurnTitleEditing(false);
+  }
+
+  async function handleAddTurnTag() {
+    if (!selectedTurn || !turnTagInputDraft.trim()) {
+      return;
+    }
+
+    const nextTags = appendTagDraft(turnTagsDraft, turnTagInputDraft);
+
+    if (areStringListsEqual(nextTags, turnTagsDraft)) {
+      setTurnTagInputDraft("");
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        tags: nextTags
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        tags: nextTags
+      });
+      setTurnTagInputDraft("");
+      setTurnTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  async function handleRemoveTurnTag(tagToRemove: string) {
+    if (!selectedTurn) {
+      return;
+    }
+
+    const nextTags = turnTagsDraft.filter((tag) => tag !== tagToRemove);
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        tags: nextTags
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        tags: nextTags
+      });
+      setTurnTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  function handleTurnTagInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    void handleAddTurnTag();
+  }
+
+  function handleResetTurnMemoDraft() {
+    setTurnNotesDraft(selectedTurn?.notes ?? "");
   }
 
   async function handleSaveThreadTitle() {
@@ -1063,6 +1271,51 @@ export default function App() {
         displayTitle: null
       });
       setIsThreadTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleSaveThreadMemo() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        notes: normalizedThreadNotesDraft
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        notes: normalizedThreadNotesDraft
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingThreadOverride(false);
+    }
+  }
+
+  async function handleClearThreadMemo() {
+    if (!selectedThread) {
+      return;
+    }
+
+    setIsSavingThreadOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveThreadOverride(selectedThread.id, {
+        notes: ""
+      });
+      applyThreadOverrideToState(selectedThread.id, {
+        notes: ""
+      });
+      setThreadNotesDraft("");
     } catch (error) {
       setLoadError(getErrorMessage(error));
     } finally {
@@ -1135,6 +1388,51 @@ export default function App() {
         displayTitle: null
       });
       setIsTurnTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  async function handleSaveTurnMemo() {
+    if (!selectedTurn) {
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        notes: normalizedTurnNotesDraft
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        notes: normalizedTurnNotesDraft
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingTurnOverride(false);
+    }
+  }
+
+  async function handleClearTurnMemo() {
+    if (!selectedTurn) {
+      return;
+    }
+
+    setIsSavingTurnOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveTurnOverride(selectedTurn.id, {
+        notes: ""
+      });
+      applyTurnOverrideToState(selectedTurn.id, {
+        notes: ""
+      });
+      setTurnNotesDraft("");
     } catch (error) {
       setLoadError(getErrorMessage(error));
     } finally {
@@ -1742,6 +2040,121 @@ export default function App() {
               </div>
             ) : null}
           </div>
+
+          {selectedThread ? (
+            <section className="local-metadata-panel">
+              <div className="local-metadata-shell-header">
+                <div>
+                  <p className="management-kicker">Local metadata</p>
+                  <p className="muted">Tags and memo are stored only in CodexCardFeed.</p>
+                </div>
+                <button
+                  aria-expanded={!isThreadMetadataCollapsed}
+                  className="secondary-button"
+                  onClick={() => setIsThreadMetadataCollapsed((value) => !value)}
+                  type="button"
+                >
+                  {isThreadMetadataCollapsed ? "Show" : "Hide"}
+                </button>
+              </div>
+
+              {!isThreadMetadataCollapsed ? (
+                <>
+                  <div className="metadata-field">
+                    <div className="metadata-section-header">
+                      <label className="metadata-label" htmlFor="thread-tags-input">
+                        Tags
+                      </label>
+                      <div className="metadata-section-actions">
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingThreadOverride || !canAddThreadTag}
+                          onClick={() => void handleAddThreadTag()}
+                          type="button"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                    <div className="metadata-input-row">
+                      <input
+                        id="thread-tags-input"
+                        className="metadata-input"
+                        onChange={(event) => setThreadTagInputDraft(event.target.value)}
+                        onKeyDown={handleThreadTagInputKeyDown}
+                        placeholder="Add one tag and press Enter"
+                        type="text"
+                        value={threadTagInputDraft}
+                      />
+                    </div>
+                    {threadTagsDraft.length ? (
+                      <div className="tag-chip-list">
+                        {threadTagsDraft.map((tag) => (
+                          <span className="tag-chip" key={tag}>
+                            <span>{tag}</span>
+                            <button
+                              aria-label={`Remove ${tag} tag`}
+                              className="tag-chip-remove"
+                              onClick={() => void handleRemoveThreadTag(tag)}
+                              type="button"
+                            >
+                              x
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="muted">No local tags.</p>
+                    )}
+                  </div>
+
+                  <div className="metadata-field">
+                    <div className="metadata-section-header">
+                      <label className="metadata-label" htmlFor="thread-notes-input">
+                        Memo
+                      </label>
+                      <div className="metadata-section-actions">
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingThreadOverride || !canSaveThreadMemo}
+                          onClick={() => void handleSaveThreadMemo()}
+                          type="button"
+                        >
+                          Save memo
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingThreadOverride || !canSaveThreadMemo}
+                          onClick={handleResetThreadMemoDraft}
+                          type="button"
+                        >
+                          Revert memo
+                        </button>
+                        {canClearThreadMemo ? (
+                          <button
+                            className="secondary-button"
+                            disabled={isSavingThreadOverride}
+                            onClick={() => void handleClearThreadMemo()}
+                            type="button"
+                          >
+                            Clear memo
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <textarea
+                      id="thread-notes-input"
+                      className="metadata-textarea"
+                      onChange={(event) => setThreadNotesDraft(event.target.value)}
+                      placeholder="Write a local memo for this thread."
+                      rows={4}
+                      value={threadNotesDraft}
+                    />
+                  </div>
+                </>
+              ) : null}
+            </section>
+          ) : null}
 
           <div className="panel-toolbar">
             <div className="panel-view-toggle" role="tablist" aria-label="Right panel view">
@@ -2586,6 +2999,119 @@ export default function App() {
                       ) : null}
                     </div>
                   </div>
+
+                  <section className="local-metadata-panel local-metadata-panel-detail">
+                    <div className="local-metadata-shell-header">
+                      <div>
+                        <p className="management-kicker">Local metadata</p>
+                        <p className="muted">Tags and memo are stored only in CodexCardFeed.</p>
+                      </div>
+                      <button
+                        aria-expanded={!isTurnMetadataCollapsed}
+                        className="secondary-button"
+                        onClick={() => setIsTurnMetadataCollapsed((value) => !value)}
+                        type="button"
+                      >
+                        {isTurnMetadataCollapsed ? "Show" : "Hide"}
+                      </button>
+                    </div>
+
+                    {!isTurnMetadataCollapsed ? (
+                      <>
+                        <div className="metadata-field">
+                          <div className="metadata-section-header">
+                            <label className="metadata-label" htmlFor="turn-tags-input">
+                              Tags
+                            </label>
+                            <div className="metadata-section-actions">
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingTurnOverride || !canAddTurnTag}
+                                onClick={() => void handleAddTurnTag()}
+                                type="button"
+                              >
+                                Add
+                              </button>
+                            </div>
+                          </div>
+                          <div className="metadata-input-row">
+                            <input
+                              id="turn-tags-input"
+                              className="metadata-input"
+                              onChange={(event) => setTurnTagInputDraft(event.target.value)}
+                              onKeyDown={handleTurnTagInputKeyDown}
+                              placeholder="Add one tag and press Enter"
+                              type="text"
+                              value={turnTagInputDraft}
+                            />
+                          </div>
+                          {turnTagsDraft.length ? (
+                            <div className="tag-chip-list">
+                              {turnTagsDraft.map((tag) => (
+                                <span className="tag-chip" key={tag}>
+                                  <span>{tag}</span>
+                                  <button
+                                    aria-label={`Remove ${tag} tag`}
+                                    className="tag-chip-remove"
+                                    onClick={() => void handleRemoveTurnTag(tag)}
+                                    type="button"
+                                  >
+                                    x
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="muted">No local tags.</p>
+                          )}
+                        </div>
+
+                        <div className="metadata-field">
+                          <div className="metadata-section-header">
+                            <label className="metadata-label" htmlFor="turn-notes-input">
+                              Memo
+                            </label>
+                            <div className="metadata-section-actions">
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingTurnOverride || !canSaveTurnMemo}
+                                onClick={() => void handleSaveTurnMemo()}
+                                type="button"
+                              >
+                                Save memo
+                              </button>
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingTurnOverride || !canSaveTurnMemo}
+                                onClick={handleResetTurnMemoDraft}
+                                type="button"
+                              >
+                                Revert memo
+                              </button>
+                              {canClearTurnMemo ? (
+                                <button
+                                  className="secondary-button"
+                                  disabled={isSavingTurnOverride}
+                                  onClick={() => void handleClearTurnMemo()}
+                                  type="button"
+                                >
+                                  Clear memo
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          <textarea
+                            id="turn-notes-input"
+                            className="metadata-textarea"
+                            onChange={(event) => setTurnNotesDraft(event.target.value)}
+                            placeholder="Write a local memo for this turn."
+                            rows={4}
+                            value={turnNotesDraft}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                  </section>
 
                   <div className="detail-meta-header">
                     <strong>{getTurnHeading(selectedTurn)}</strong>
