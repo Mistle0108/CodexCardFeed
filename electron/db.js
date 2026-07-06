@@ -416,6 +416,7 @@ function listThreads(database, projectId = null) {
         threads.updated_at,
         threads.last_seen_at
       ORDER BY
+        is_pinned DESC,
         COALESCE(threads.updated_at, threads.last_seen_at) DESC,
         threads.id DESC
     `)
@@ -499,7 +500,9 @@ function listTurnsByThread(database, threadId) {
         turns.reasoning_output_tokens,
         turns.total_tokens,
         turns.token_event_count
-      ORDER BY turns.ordinal DESC
+      ORDER BY
+        is_pinned DESC,
+        turns.ordinal DESC
     `)
     .all(threadId)
     .map((row) => ({
@@ -553,6 +556,187 @@ function listItemsByTurn(database, turnId) {
     }));
 }
 
+function normalizeOverrideDisplayTitle(displayTitle, label) {
+  if (displayTitle === undefined) {
+    return undefined;
+  }
+
+  if (displayTitle === null) {
+    return null;
+  }
+
+  if (typeof displayTitle !== "string") {
+    throw new Error(`${label} must be a string or null.`);
+  }
+
+  const normalized = displayTitle.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeOverridePinnedValue(isPinned, label) {
+  if (isPinned === undefined) {
+    return undefined;
+  }
+
+  if (typeof isPinned !== "boolean") {
+    throw new Error(`${label} must be a boolean.`);
+  }
+
+  return isPinned ? 1 : 0;
+}
+
+function saveThreadOverride(database, threadId, changes) {
+  if (typeof threadId !== "string" || !threadId.trim()) {
+    throw new Error("Thread ID cannot be empty.");
+  }
+
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    throw new Error("Thread override payload must be an object.");
+  }
+
+  const baseThread = database.prepare("SELECT id FROM threads WHERE id = ?").get(threadId);
+
+  if (!baseThread) {
+    throw new Error("Thread not found.");
+  }
+
+  const nextDisplayTitle = normalizeOverrideDisplayTitle(
+    changes.displayTitle,
+    "Thread display title"
+  );
+  const nextPinned = normalizeOverridePinnedValue(changes.isPinned, "Thread pin state");
+
+  if (nextDisplayTitle === undefined && nextPinned === undefined) {
+    return;
+  }
+
+  const existingOverride = database
+    .prepare(`
+      SELECT
+        display_title,
+        tags_json,
+        pinned,
+        notes
+      FROM thread_overrides
+      WHERE thread_id = ?
+    `)
+    .get(threadId);
+  const resolvedDisplayTitle =
+    nextDisplayTitle !== undefined ? nextDisplayTitle : existingOverride?.display_title ?? null;
+  const resolvedPinned = nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
+  const resolvedTagsJson =
+    typeof existingOverride?.tags_json === "string" ? existingOverride.tags_json : "[]";
+  const resolvedNotes = typeof existingOverride?.notes === "string" ? existingOverride.notes : "";
+
+  if (resolvedDisplayTitle === null && resolvedPinned === 0 && resolvedTagsJson === "[]" && !resolvedNotes) {
+    database.prepare("DELETE FROM thread_overrides WHERE thread_id = ?").run(threadId);
+    return;
+  }
+
+  database
+    .prepare(`
+      INSERT INTO thread_overrides (
+        thread_id,
+        display_title,
+        tags_json,
+        pinned,
+        notes,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET
+        display_title = excluded.display_title,
+        tags_json = excluded.tags_json,
+        pinned = excluded.pinned,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `)
+    .run(
+      threadId,
+      resolvedDisplayTitle,
+      resolvedTagsJson,
+      resolvedPinned,
+      resolvedNotes,
+      new Date().toISOString()
+    );
+}
+
+function saveTurnOverride(database, turnId, changes) {
+  if (typeof turnId !== "string" || !turnId.trim()) {
+    throw new Error("Turn ID cannot be empty.");
+  }
+
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    throw new Error("Turn override payload must be an object.");
+  }
+
+  const baseTurn = database.prepare("SELECT id FROM turns WHERE id = ?").get(turnId);
+
+  if (!baseTurn) {
+    throw new Error("Turn not found.");
+  }
+
+  const nextDisplayTitle = normalizeOverrideDisplayTitle(
+    changes.displayTitle,
+    "Turn display title"
+  );
+  const nextPinned = normalizeOverridePinnedValue(changes.isPinned, "Turn pin state");
+
+  if (nextDisplayTitle === undefined && nextPinned === undefined) {
+    return;
+  }
+
+  const existingOverride = database
+    .prepare(`
+      SELECT
+        display_title,
+        tags_json,
+        pinned,
+        notes
+      FROM turn_overrides
+      WHERE turn_id = ?
+    `)
+    .get(turnId);
+  const resolvedDisplayTitle =
+    nextDisplayTitle !== undefined ? nextDisplayTitle : existingOverride?.display_title ?? null;
+  const resolvedPinned = nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
+  const resolvedTagsJson =
+    typeof existingOverride?.tags_json === "string" ? existingOverride.tags_json : "[]";
+  const resolvedNotes = typeof existingOverride?.notes === "string" ? existingOverride.notes : "";
+
+  if (resolvedDisplayTitle === null && resolvedPinned === 0 && resolvedTagsJson === "[]" && !resolvedNotes) {
+    database.prepare("DELETE FROM turn_overrides WHERE turn_id = ?").run(turnId);
+    return;
+  }
+
+  database
+    .prepare(`
+      INSERT INTO turn_overrides (
+        turn_id,
+        display_title,
+        tags_json,
+        pinned,
+        notes,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(turn_id) DO UPDATE SET
+        display_title = excluded.display_title,
+        tags_json = excluded.tags_json,
+        pinned = excluded.pinned,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `)
+    .run(
+      turnId,
+      resolvedDisplayTitle,
+      resolvedTagsJson,
+      resolvedPinned,
+      resolvedNotes,
+      new Date().toISOString()
+    );
+}
+
 function initializeDatabase(databasePath) {
   const database = new DatabaseSync(databasePath);
 
@@ -576,5 +760,7 @@ module.exports = {
   listThreads,
   listThreadsByProject,
   listTurnsByThread,
-  listItemsByTurn
+  listItemsByTurn,
+  saveThreadOverride,
+  saveTurnOverride
 };

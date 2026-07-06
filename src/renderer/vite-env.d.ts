@@ -112,6 +112,11 @@ type ThreadListItem = {
   completedTurnCount: number;
 };
 
+type LocalOverrideInput = {
+  displayTitle?: string | null;
+  isPinned?: boolean;
+};
+
 type TurnListItem = {
   id: string;
   threadId: string;
@@ -223,6 +228,8 @@ interface Window {
     getShellInfo(): Promise<ShellInfo>;
     importCodexSessions(): Promise<ImportResult>;
     openCodexThread(threadId: string): Promise<void>;
+    saveThreadOverride(threadId: string, changes: LocalOverrideInput): Promise<void>;
+    saveTurnOverride(turnId: string, changes: LocalOverrideInput): Promise<void>;
     updateCodexHome(codexHome: string): Promise<ShellInfo>;
     resetCodexHome(): Promise<ShellInfo>;
     updateDatabasePath(databasePath: string): Promise<ShellInfo>;
