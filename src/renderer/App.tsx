@@ -153,7 +153,7 @@ type ItemPresentation = {
 };
 
 type MetadataFilterState = {
-  tagQuery: string;
+  searchTerms: string[];
   pinnedOnly: boolean;
   memoOnly: boolean;
 };
@@ -224,11 +224,7 @@ function getTurnHeading(turn: TurnListItem) {
     : `Turn ${turn.ordinal}`;
 }
 
-function normalizeMetadataTagQuery(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function normalizeThreadSearchTerms(value: string) {
+function normalizeSearchTerms(value: string) {
   return value
     .trim()
     .toLowerCase()
@@ -236,11 +232,135 @@ function normalizeThreadSearchTerms(value: string) {
     .filter(Boolean);
 }
 
-function hasActiveMetadataFilters(filters: MetadataFilterState) {
-  return Boolean(filters.tagQuery || filters.pinnedOnly || filters.memoOnly);
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function matchesMetadataFilters(item: MetadataFilterable, filters: MetadataFilterState) {
+function normalizeSearchSourceText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hasActiveMetadataFilters(filters: MetadataFilterState) {
+  return Boolean(filters.searchTerms.length || filters.pinnedOnly || filters.memoOnly);
+}
+
+function containsAnySearchTerm(text: string, searchTerms: string[]) {
+  const normalized = normalizeSearchSourceText(text).toLowerCase();
+
+  if (!normalized || !searchTerms.length) {
+    return false;
+  }
+
+  return searchTerms.some((term) => normalized.includes(term));
+}
+
+function matchesSearchTerms(values: string[], searchTerms: string[]) {
+  if (!searchTerms.length) {
+    return true;
+  }
+
+  const haystack = values
+    .map((value) => normalizeSearchSourceText(value).toLowerCase())
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (!haystack) {
+    return false;
+  }
+
+  return searchTerms.every((term) => haystack.includes(term));
+}
+
+function getHighlightedSegments(text: string, searchTerms: string[]) {
+  if (!text || !searchTerms.length) {
+    return [{ text, isMatch: false }];
+  }
+
+  const uniqueTerms = [...new Set(searchTerms)].sort((left, right) => right.length - left.length);
+
+  if (!uniqueTerms.length) {
+    return [{ text, isMatch: false }];
+  }
+
+  const pattern = new RegExp(uniqueTerms.map((term) => escapeRegExp(term)).join("|"), "gi");
+  const segments: Array<{ text: string; isMatch: boolean }> = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const matchText = match[0] ?? "";
+    const matchIndex = match.index ?? 0;
+
+    if (matchIndex > lastIndex) {
+      segments.push({
+        text: text.slice(lastIndex, matchIndex),
+        isMatch: false
+      });
+    }
+
+    segments.push({
+      text: matchText,
+      isMatch: true
+    });
+
+    lastIndex = matchIndex + matchText.length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({
+      text: text.slice(lastIndex),
+      isMatch: false
+    });
+  }
+
+  return segments.length ? segments : [{ text, isMatch: false }];
+}
+
+function getMatchingExcerpt(text: string, searchTerms: string[], maxLength = 140) {
+  const normalized = normalizeSearchSourceText(text);
+
+  if (!normalized || !searchTerms.length) {
+    return null;
+  }
+
+  const lowerText = normalized.toLowerCase();
+  let firstMatchIndex = -1;
+
+  for (const term of searchTerms) {
+    const nextIndex = lowerText.indexOf(term);
+
+    if (nextIndex !== -1 && (firstMatchIndex === -1 || nextIndex < firstMatchIndex)) {
+      firstMatchIndex = nextIndex;
+    }
+  }
+
+  if (firstMatchIndex === -1) {
+    return null;
+  }
+
+  const start = Math.max(0, firstMatchIndex - Math.floor((maxLength - 1) / 2));
+  const end = Math.min(normalized.length, start + maxLength);
+  const excerpt = normalized.slice(start, end).trim();
+
+  return `${start > 0 ? "..." : ""}${excerpt}${end < normalized.length ? "..." : ""}`;
+}
+
+function renderHighlightedText(text: string, searchTerms: string[]) {
+  return getHighlightedSegments(text, searchTerms).map((segment, index) =>
+    segment.isMatch ? (
+      <mark className="search-highlight" key={`${segment.text}-${index}`}>
+        {segment.text}
+      </mark>
+    ) : (
+      <span key={`${segment.text}-${index}`}>{segment.text}</span>
+    )
+  );
+}
+
+function matchesMetadataFilters(
+  item: MetadataFilterable,
+  filters: MetadataFilterState,
+  searchValues: string[]
+) {
   if (filters.pinnedOnly && !item.isPinned) {
     return false;
   }
@@ -249,8 +369,8 @@ function matchesMetadataFilters(item: MetadataFilterable, filters: MetadataFilte
     return false;
   }
 
-  if (filters.tagQuery) {
-    return item.tags.some((tag) => tag.toLowerCase().includes(filters.tagQuery));
+  if (filters.searchTerms.length) {
+    return matchesSearchTerms(searchValues, filters.searchTerms);
   }
 
   return true;
@@ -268,19 +388,16 @@ function groupThreadsByProjectId(rows: ThreadListItem[]) {
 }
 
 function matchesTurnThreadSearch(turn: TurnListItem, searchTerms: string[]) {
-  if (!searchTerms.length) {
-    return true;
-  }
-
-  const haystack = [
-    turn.displayTitle ?? "",
-    turn.searchUserText,
-    turn.searchFinalAnswerText
-  ]
-    .join("\n\n")
-    .toLowerCase();
-
-  return searchTerms.every((term) => haystack.includes(term));
+  return matchesSearchTerms(
+    [
+      turn.displayTitle ?? "",
+      turn.searchUserText,
+      turn.searchFinalAnswerText,
+      ...turn.tags,
+      turn.notes
+    ],
+    searchTerms
+  );
 }
 
 function resolveProjectDisplayNameOverride(draftValue: string, sourceDisplayName: string) {
@@ -819,10 +936,10 @@ export default function App() {
   const selectedThread =
     threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
-  const normalizedMetadataTagFilter = normalizeMetadataTagQuery(metadataTagFilter);
-  const normalizedThreadSearchTerms = normalizeThreadSearchTerms(threadSearchQuery);
+  const normalizedSidebarSearchTerms = normalizeSearchTerms(metadataTagFilter);
+  const normalizedThreadSearchTerms = normalizeSearchTerms(threadSearchQuery);
   const metadataFilters: MetadataFilterState = {
-    tagQuery: normalizedMetadataTagFilter,
+    searchTerms: normalizedSidebarSearchTerms,
     pinnedOnly: isPinnedFilterActive,
     memoOnly: isMemoFilterActive
   };
@@ -851,10 +968,14 @@ export default function App() {
   const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
   const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
   const matchingProjectThreads = isMetadataFilterActive
-    ? projectThreads.filter((thread) => matchesMetadataFilters(thread, metadataFilters))
+    ? projectThreads.filter((thread) =>
+        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+      )
     : projectThreads;
   const matchingChatThreads = isMetadataFilterActive
-    ? chatThreads.filter((thread) => matchesMetadataFilters(thread, metadataFilters))
+    ? chatThreads.filter((thread) =>
+        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+      )
     : chatThreads;
   const matchingProjectThreadsByProjectId = groupThreadsByProjectId(matchingProjectThreads);
   const threadsByProjectId = groupThreadsByProjectId(projectThreads);
@@ -864,7 +985,7 @@ export default function App() {
     }
 
     return (
-      matchesMetadataFilters(project, metadataFilters) ||
+      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
       Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
     );
   });
@@ -890,7 +1011,7 @@ export default function App() {
     }
 
     return (
-      matchesMetadataFilters(project, metadataFilters) ||
+      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
       Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
     );
   });
@@ -2025,6 +2146,35 @@ export default function App() {
     }
   }
 
+  function getMatchingTagValues(tags: string[], searchTerms: string[]) {
+    if (!searchTerms.length) {
+      return [];
+    }
+
+    return tags.filter((tag) => containsAnySearchTerm(tag, searchTerms));
+  }
+
+  function getMatchingMemoExcerpt(notes: string, searchTerms: string[], maxLength = 120) {
+    if (!searchTerms.length || !containsAnySearchTerm(notes, searchTerms)) {
+      return null;
+    }
+
+    return getMatchingExcerpt(notes, searchTerms, maxLength) ?? normalizeSearchSourceText(notes);
+  }
+
+  function getAdditionalSearchExcerpt(
+    fullText: string,
+    visibleText: string,
+    searchTerms: string[],
+    maxLength = 120
+  ) {
+    if (!searchTerms.length || containsAnySearchTerm(visibleText, searchTerms)) {
+      return null;
+    }
+
+    return getMatchingExcerpt(fullText, searchTerms, maxLength);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar-shell">
@@ -2166,7 +2316,7 @@ export default function App() {
             <input
               className="path-panel-input sidebar-filter-input"
               onChange={(event) => setMetadataTagFilter(event.target.value)}
-              placeholder="Filter by tag"
+              placeholder="Search projects, threads, tags"
               type="text"
               value={metadataTagFilter}
             />
@@ -2221,6 +2371,10 @@ export default function App() {
                 const isProjectExpanded = isMetadataFilterActive
                   ? visibleProjectThreads.length > 0
                   : Boolean(expandedProjectIds[project.id]);
+                const matchingProjectTags = getMatchingTagValues(
+                  project.tags,
+                  normalizedSidebarSearchTerms
+                );
 
                 return (
                   <article className="sidebar-project-group" key={project.id}>
@@ -2234,12 +2388,21 @@ export default function App() {
                       >
                         <div className="sidebar-project-heading">
                           <div className="sidebar-project-title-row">
-                            <strong>{project.displayName}</strong>
+                            <strong>{renderHighlightedText(project.displayName, normalizedSidebarSearchTerms)}</strong>
                             {project.isPinned ? (
                               <span className="sidebar-pin-badge">Pinned</span>
                             ) : null}
                           </div>
                         </div>
+                        {matchingProjectTags.length ? (
+                          <div className="sidebar-search-tag-list">
+                            {matchingProjectTags.map((tag) => (
+                              <span className="sidebar-search-tag" key={tag}>
+                                {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <div className="sidebar-item-meta">
                           <span>
                             {formatCountLabel(project.threadCount, "thread")} /{" "}
@@ -2262,23 +2425,41 @@ export default function App() {
 
                     {isProjectExpanded ? (
                       <div className="sidebar-project-thread-list">
-                        {visibleProjectThreads.map((thread) => (
-                          <button
-                            className={`sidebar-project-thread-button ${
-                              selectedThreadId === thread.id ? "is-active" : ""
-                            }`}
-                            key={thread.id}
-                            onClick={() => handleThreadSelect(thread.id)}
-                            type="button"
-                          >
-                            <span className="sidebar-thread-row">
-                              <span className="sidebar-thread-title">{thread.title}</span>
-                              {thread.isPinned ? (
-                                <span className="sidebar-pin-badge">Pinned</span>
+                        {visibleProjectThreads.map((thread) => {
+                          const matchingThreadTags = getMatchingTagValues(
+                            thread.tags,
+                            normalizedSidebarSearchTerms
+                          );
+
+                          return (
+                            <button
+                              className={`sidebar-project-thread-button ${
+                                selectedThreadId === thread.id ? "is-active" : ""
+                              }`}
+                              key={thread.id}
+                              onClick={() => handleThreadSelect(thread.id)}
+                              type="button"
+                            >
+                              <span className="sidebar-thread-row">
+                                <span className="sidebar-thread-title">
+                                  {renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}
+                                </span>
+                                {thread.isPinned ? (
+                                  <span className="sidebar-pin-badge">Pinned</span>
+                                ) : null}
+                              </span>
+                              {matchingThreadTags.length ? (
+                                <span className="sidebar-thread-search-tags">
+                                  {matchingThreadTags.map((tag) => (
+                                    <span className="sidebar-search-tag" key={tag}>
+                                      {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                    </span>
+                                  ))}
+                                </span>
                               ) : null}
-                            </span>
-                          </button>
-                        ))}
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </article>
@@ -2326,6 +2507,10 @@ export default function App() {
                   const isProjectExpanded = isMetadataFilterActive
                     ? visibleProjectThreads.length > 0
                     : Boolean(expandedProjectIds[project.id]);
+                  const matchingProjectTags = getMatchingTagValues(
+                    project.tags,
+                    normalizedSidebarSearchTerms
+                  );
 
                   return (
                     <article className="sidebar-project-group" key={project.id}>
@@ -2339,7 +2524,7 @@ export default function App() {
                         >
                           <div className="sidebar-project-heading">
                             <div className="sidebar-project-title-row">
-                              <strong>{project.displayName}</strong>
+                              <strong>{renderHighlightedText(project.displayName, normalizedSidebarSearchTerms)}</strong>
                               {project.isPinned ? (
                                 <span className="sidebar-pin-badge">Pinned</span>
                               ) : null}
@@ -2352,6 +2537,15 @@ export default function App() {
                               </span>
                             </div>
                           </div>
+                          {matchingProjectTags.length ? (
+                            <div className="sidebar-search-tag-list">
+                              {matchingProjectTags.map((tag) => (
+                                <span className="sidebar-search-tag" key={tag}>
+                                  {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                           <div className="sidebar-item-meta">
                             <span>
                               {formatCountLabel(project.threadCount, "thread")} /{" "}
@@ -2374,23 +2568,41 @@ export default function App() {
 
                       {isProjectExpanded ? (
                         <div className="sidebar-project-thread-list">
-                          {visibleProjectThreads.map((thread) => (
-                            <button
-                              className={`sidebar-project-thread-button ${
-                                selectedThreadId === thread.id ? "is-active" : ""
-                              }`}
-                              key={thread.id}
-                              onClick={() => handleThreadSelect(thread.id)}
-                              type="button"
-                            >
-                              <span className="sidebar-thread-row">
-                                <span className="sidebar-thread-title">{thread.title}</span>
-                                {thread.isPinned ? (
-                                  <span className="sidebar-pin-badge">Pinned</span>
+                          {visibleProjectThreads.map((thread) => {
+                            const matchingThreadTags = getMatchingTagValues(
+                              thread.tags,
+                              normalizedSidebarSearchTerms
+                            );
+
+                            return (
+                              <button
+                                className={`sidebar-project-thread-button ${
+                                  selectedThreadId === thread.id ? "is-active" : ""
+                                }`}
+                                key={thread.id}
+                                onClick={() => handleThreadSelect(thread.id)}
+                                type="button"
+                              >
+                                <span className="sidebar-thread-row">
+                                  <span className="sidebar-thread-title">
+                                    {renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}
+                                  </span>
+                                  {thread.isPinned ? (
+                                    <span className="sidebar-pin-badge">Pinned</span>
+                                  ) : null}
+                                </span>
+                                {matchingThreadTags.length ? (
+                                  <span className="sidebar-thread-search-tags">
+                                    {matchingThreadTags.map((tag) => (
+                                      <span className="sidebar-search-tag" key={tag}>
+                                        {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                      </span>
+                                    ))}
+                                  </span>
                                 ) : null}
-                              </span>
-                            </button>
-                          ))}
+                              </button>
+                            );
+                          })}
                         </div>
                       ) : null}
                     </article>
@@ -2427,25 +2639,41 @@ export default function App() {
 
           {!isChatsCollapsed && matchingChatThreads.length ? (
             <div className="sidebar-chat-list">
-              {matchingChatThreads.map((thread) => (
-                <button
-                  key={thread.id}
-                  className={`sidebar-chat-button ${
-                    selectedThreadId === thread.id ? "is-active" : ""
-                  }`}
-                  onClick={() => handleThreadSelect(thread.id)}
-                  type="button"
-                >
-                  <div className="sidebar-chat-heading">
-                    <strong>{thread.title}</strong>
-                    {thread.isPinned ? <span className="sidebar-pin-badge">Pinned</span> : null}
-                  </div>
-                  <div className="sidebar-item-meta">
-                    <span>{formatCountLabel(thread.turnCount, "turn")}</span>
-                    <span>{formatDateTime(thread.updatedAt ?? thread.lastSeenAt)}</span>
-                  </div>
-                </button>
-              ))}
+              {matchingChatThreads.map((thread) => {
+                const matchingThreadTags = getMatchingTagValues(
+                  thread.tags,
+                  normalizedSidebarSearchTerms
+                );
+
+                return (
+                  <button
+                    key={thread.id}
+                    className={`sidebar-chat-button ${
+                      selectedThreadId === thread.id ? "is-active" : ""
+                    }`}
+                    onClick={() => handleThreadSelect(thread.id)}
+                    type="button"
+                  >
+                    <div className="sidebar-chat-heading">
+                      <strong>{renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}</strong>
+                      {thread.isPinned ? <span className="sidebar-pin-badge">Pinned</span> : null}
+                    </div>
+                    {matchingThreadTags.length ? (
+                      <div className="sidebar-search-tag-list">
+                        {matchingThreadTags.map((tag) => (
+                          <span className="sidebar-search-tag" key={tag}>
+                            {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="sidebar-item-meta">
+                      <span>{formatCountLabel(thread.turnCount, "turn")}</span>
+                      <span>{formatDateTime(thread.updatedAt ?? thread.lastSeenAt)}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           ) : !isChatsCollapsed ? (
             <p className="sidebar-empty-state">
@@ -2701,7 +2929,7 @@ export default function App() {
               className="path-panel-input panel-search-input"
               disabled={!selectedThread}
               onChange={(event) => setThreadSearchQuery(event.target.value)}
-              placeholder="Search this thread"
+              placeholder="Search this thread content, tags, memo"
               type="text"
               value={threadSearchQuery}
             />
@@ -2721,75 +2949,184 @@ export default function App() {
           {visibleTurns.length ? (
             rightPanelMode === "turns" ? (
               <div className="selection-list">
-                {visibleTurns.map((turn) => (
-                  <button
-                    data-turn-card-id={turn.id}
-                    key={turn.id}
-                    className={`selection-button ${
-                      selectedTurnId === turn.id ? "is-active" : ""
-                    }`}
-                    onClick={() => handleOpenTurnDetail(turn.id)}
-                    type="button"
-                  >
-                    <div className="selection-copy">
-                      <div className="selection-topline">
-                        <strong>{getTurnHeading(turn)}</strong>
-                        <div className="selection-pills">
-                          {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
-                          <span
-                            className={`status-pill ${
-                              turn.status === "completed" ? "is-complete" : "is-open"
-                            }`}
-                          >
-                            {turn.status}
+                {visibleTurns.map((turn) => {
+                  const turnHeading = getTurnHeading(turn);
+                  const questionPreview = getQuestionPreview(turn);
+                  const answerPreview = getAnswerPreview(turn);
+                  const matchingTurnTags = getMatchingTagValues(
+                    turn.tags,
+                    normalizedThreadSearchTerms
+                  );
+                  const matchingMemoExcerpt = getMatchingMemoExcerpt(
+                    turn.notes,
+                    normalizedThreadSearchTerms
+                  );
+                  const questionMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchUserText,
+                    questionPreview,
+                    normalizedThreadSearchTerms
+                  );
+                  const answerMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchFinalAnswerText,
+                    answerPreview,
+                    normalizedThreadSearchTerms
+                  );
+
+                  return (
+                    <button
+                      data-turn-card-id={turn.id}
+                      key={turn.id}
+                      className={`selection-button ${
+                        selectedTurnId === turn.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleOpenTurnDetail(turn.id)}
+                      type="button"
+                    >
+                      <div className="selection-copy">
+                        <div className="selection-topline">
+                          <strong>{renderHighlightedText(turnHeading, normalizedThreadSearchTerms)}</strong>
+                          <div className="selection-pills">
+                            {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                            <span
+                              className={`status-pill ${
+                                turn.status === "completed" ? "is-complete" : "is-open"
+                              }`}
+                            >
+                              {turn.status}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="turn-preview">
+                          <span className="preview-label">Q</span>
+                          <span>{renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}</span>
+                        </p>
+                        {questionMatchExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Q+</span>
+                            <span>{renderHighlightedText(questionMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                        <p className="turn-preview">
+                          <span className="preview-label">A</span>
+                          <span>{renderHighlightedText(answerPreview, normalizedThreadSearchTerms)}</span>
+                        </p>
+                        {answerMatchExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">A+</span>
+                            <span>{renderHighlightedText(answerMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                        {matchingTurnTags.length ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Tag</span>
+                            <span className="turn-search-tag-list">
+                              {matchingTurnTags.map((tag) => (
+                                <span className="turn-search-tag" key={tag}>
+                                  {renderHighlightedText(tag, normalizedThreadSearchTerms)}
+                                </span>
+                              ))}
+                            </span>
+                          </p>
+                        ) : null}
+                        {matchingMemoExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Memo</span>
+                            <span>{renderHighlightedText(matchingMemoExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="turn-card-actions">
+                        <div className="selection-trailing">
+                          <span className="mini-meta">
+                            {formatCountLabel(turn.itemCount, "item")}
+                          </span>
+                          <span className="mini-meta token-meta">
+                            {formatTokenLabel(turn.totalTokens)}
                           </span>
                         </div>
                       </div>
-                      <p className="turn-preview">
-                        <span className="preview-label">Q</span>
-                        <span>{getQuestionPreview(turn)}</span>
-                      </p>
-                      <p className="turn-preview">
-                        <span className="preview-label">A</span>
-                        <span>{getAnswerPreview(turn)}</span>
-                      </p>
-                    </div>
-                    <div className="turn-card-actions">
-                      <div className="selection-trailing">
-                        <span className="mini-meta">
-                          {formatCountLabel(turn.itemCount, "item")}
-                        </span>
-                        <span className="mini-meta token-meta">
-                          {formatTokenLabel(turn.totalTokens)}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <div className="question-list">
-                {questionTurns.map((turn) => (
-                  <button
-                    key={turn.id}
-                    className={`selection-button question-card ${
-                      selectedTurnId === turn.id ? "is-active" : ""
-                    }`}
-                    onClick={() => handleOpenTurnDetail(turn.id)}
-                    type="button"
-                  >
-                    <div className="question-card-header">
-                      <div className="question-card-heading">
-                        <strong>{getTurnHeading(turn)}</strong>
-                        {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                {questionTurns.map((turn) => {
+                  const turnHeading = getTurnHeading(turn);
+                  const questionPreview = getQuestionPreview(turn);
+                  const matchingTurnTags = getMatchingTagValues(
+                    turn.tags,
+                    normalizedThreadSearchTerms
+                  );
+                  const matchingMemoExcerpt = getMatchingMemoExcerpt(
+                    turn.notes,
+                    normalizedThreadSearchTerms
+                  );
+                  const questionMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchUserText,
+                    questionPreview,
+                    normalizedThreadSearchTerms
+                  );
+                  const answerMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchFinalAnswerText,
+                    "",
+                    normalizedThreadSearchTerms
+                  );
+
+                  return (
+                    <button
+                      key={turn.id}
+                      className={`selection-button question-card ${
+                        selectedTurnId === turn.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleOpenTurnDetail(turn.id)}
+                      type="button"
+                    >
+                      <div className="question-card-header">
+                        <div className="question-card-heading">
+                          <strong>{renderHighlightedText(turnHeading, normalizedThreadSearchTerms)}</strong>
+                          {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                        </div>
+                        <span className="mini-meta">
+                          {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
+                        </span>
                       </div>
-                      <span className="mini-meta">
-                        {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
-                      </span>
-                    </div>
-                    <p className="question-card-question">{getQuestionPreview(turn)}</p>
-                  </button>
-                ))}
+                      <p className="question-card-question">
+                        {renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}
+                      </p>
+                      {questionMatchExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Q+</span>
+                          <span>{renderHighlightedText(questionMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                      {answerMatchExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">A</span>
+                          <span>{renderHighlightedText(answerMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                      {matchingTurnTags.length ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Tag</span>
+                          <span className="turn-search-tag-list">
+                            {matchingTurnTags.map((tag) => (
+                              <span className="turn-search-tag" key={tag}>
+                                {renderHighlightedText(tag, normalizedThreadSearchTerms)}
+                              </span>
+                            ))}
+                          </span>
+                        </p>
+                      ) : null}
+                      {matchingMemoExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Memo</span>
+                          <span>{renderHighlightedText(matchingMemoExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             )
           ) : (
