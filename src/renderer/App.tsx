@@ -45,6 +45,22 @@ function compareNullableIsoDesc(left: string | null, right: string | null) {
   return left > right ? -1 : 1;
 }
 
+function sortProjectRows(rows: ProjectListItem[]) {
+  return [...rows].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return Number(right.isPinned) - Number(left.isPinned);
+    }
+
+    const activityOrder = compareNullableIsoDesc(left.lastActivityAt, right.lastActivityAt);
+
+    if (activityOrder !== 0) {
+      return activityOrder;
+    }
+
+    return left.displayName.localeCompare(right.displayName);
+  });
+}
+
 function sortThreadRows(rows: ThreadListItem[]) {
   return [...rows].sort((left, right) => {
     if (left.isPinned !== right.isPinned) {
@@ -181,6 +197,11 @@ function getTurnHeading(turn: TurnListItem) {
   return turn.displayTitle
     ? `Turn ${turn.ordinal} / ${turn.displayTitle}`
     : `Turn ${turn.ordinal}`;
+}
+
+function resolveProjectDisplayNameOverride(draftValue: string, sourceDisplayName: string) {
+  const normalizedDraft = draftValue.trim();
+  return normalizedDraft && normalizedDraft !== sourceDisplayName.trim() ? normalizedDraft : null;
 }
 
 function resolveThreadDisplayTitleOverride(draftValue: string, sourceTitle: string) {
@@ -648,8 +669,15 @@ export default function App() {
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
   const [sessionDiagnosisReport, setSessionDiagnosisReport] =
     useState<SessionDiagnosisReport | null>(null);
+  const [projectModalProjectId, setProjectModalProjectId] = useState<string | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [isProjectTitleEditing, setIsProjectTitleEditing] = useState(false);
+  const [projectTitleDraft, setProjectTitleDraft] = useState("");
+  const [isProjectMetadataCollapsed, setIsProjectMetadataCollapsed] = useState(false);
+  const [projectTagInputDraft, setProjectTagInputDraft] = useState("");
+  const [projectTagsDraft, setProjectTagsDraft] = useState<string[]>([]);
+  const [projectNotesDraft, setProjectNotesDraft] = useState("");
   const [isTurnModalOpen, setIsTurnModalOpen] = useState(false);
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -675,6 +703,7 @@ export default function App() {
   const [turnTagInputDraft, setTurnTagInputDraft] = useState("");
   const [turnTagsDraft, setTurnTagsDraft] = useState<string[]>([]);
   const [turnNotesDraft, setTurnNotesDraft] = useState("");
+  const [isSavingProjectOverride, setIsSavingProjectOverride] = useState(false);
   const [isSavingThreadOverride, setIsSavingThreadOverride] = useState(false);
   const [isSavingTurnOverride, setIsSavingTurnOverride] = useState(false);
   const [isAdditionalItemsVisible, setIsAdditionalItemsVisible] = useState(false);
@@ -697,6 +726,8 @@ export default function App() {
     readStoredExpandedProjectIds()
   );
 
+  const selectedProject =
+    projects.find((project) => project.id === projectModalProjectId) ?? null;
   const selectedThread =
     threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
@@ -735,6 +766,7 @@ export default function App() {
   const allProjectIds = new Set(projects.map((project) => project.id));
   const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
   const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const normalizedProjectNotesDraft = normalizeNoteDraft(projectNotesDraft);
   const normalizedThreadNotesDraft = normalizeNoteDraft(threadNotesDraft);
   const normalizedTurnNotesDraft = normalizeNoteDraft(turnNotesDraft);
   const canSaveCodexHome = Boolean(
@@ -755,6 +787,19 @@ export default function App() {
     selectedTurn && turnTitleDraft.trim() !== (selectedTurn.displayTitle ?? "")
   );
   const canResetTurnTitle = Boolean(selectedTurn?.displayTitle);
+  const canSaveProjectTitle = Boolean(
+    selectedProject && projectTitleDraft.trim() !== selectedProject.displayName.trim()
+  );
+  const canResetProjectTitle = Boolean(
+    selectedProject && selectedProject.displayName !== selectedProject.sourceDisplayName
+  );
+  const canAddProjectTag = Boolean(
+    projectTagInputDraft.trim() && !projectTagsDraft.includes(projectTagInputDraft.trim())
+  );
+  const canSaveProjectMemo = Boolean(
+    selectedProject && normalizedProjectNotesDraft !== selectedProject.notes
+  );
+  const canClearProjectMemo = Boolean(selectedProject?.notes);
   const canAddThreadTag = Boolean(
     threadTagInputDraft.trim() &&
       !threadTagsDraft.includes(threadTagInputDraft.trim())
@@ -861,7 +906,7 @@ export default function App() {
       window.codexCardFeed.listThreads(null)
     ]);
 
-    setProjects(nextProjects);
+    setProjects(sortProjectRows(nextProjects));
     setThreads(nextThreads);
 
     const nextThreadId = resolveSelectedId(nextThreads, preferredThreadId);
@@ -926,12 +971,13 @@ export default function App() {
   }, [expandedProjectIds]);
 
   useEffect(() => {
-    if (!isTurnModalOpen && !isDiagnosticsModalOpen) {
+    if (!projectModalProjectId && !isTurnModalOpen && !isDiagnosticsModalOpen) {
       return;
     }
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        setProjectModalProjectId(null);
         setIsTurnModalOpen(false);
         setIsDiagnosticsModalOpen(false);
       }
@@ -941,7 +987,26 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [isTurnModalOpen, isDiagnosticsModalOpen]);
+  }, [projectModalProjectId, isTurnModalOpen, isDiagnosticsModalOpen]);
+
+  useEffect(() => {
+    if (projectModalProjectId && !selectedProject) {
+      setProjectModalProjectId(null);
+    }
+  }, [projectModalProjectId, selectedProject]);
+
+  useEffect(() => {
+    setIsProjectTitleEditing(false);
+    setProjectTitleDraft(selectedProject?.displayName ?? "");
+    setProjectTagInputDraft("");
+    setProjectTagsDraft(selectedProject?.tags ?? []);
+    setProjectNotesDraft(selectedProject?.notes ?? "");
+  }, [
+    selectedProject?.displayName,
+    selectedProject?.id,
+    selectedProject?.notes,
+    selectedProject?.tags
+  ]);
 
   useEffect(() => {
     setIsAdditionalItemsVisible(false);
@@ -1012,6 +1077,10 @@ export default function App() {
     }));
   }
 
+  function handleOpenProjectModal(projectId: string) {
+    setProjectModalProjectId(projectId);
+  }
+
   function handleThreadSelect(threadId: string) {
     revealThreadSelection(threadId);
 
@@ -1033,6 +1102,33 @@ export default function App() {
 
   function handleCloseDiagnosticsModal() {
     setIsDiagnosticsModalOpen(false);
+  }
+
+  function handleCloseProjectModal() {
+    setProjectModalProjectId(null);
+  }
+
+  function applyProjectOverrideToState(projectId: string, changes: ProjectOverrideInput) {
+    setProjects((current) =>
+      sortProjectRows(
+        current.map((project) => {
+          if (project.id !== projectId) {
+            return project;
+          }
+
+          return {
+            ...project,
+            displayName:
+              changes.displayName !== undefined
+                ? changes.displayName ?? project.sourceDisplayName
+                : project.displayName,
+            isPinned: changes.isPinned ?? project.isPinned,
+            tags: changes.tags !== undefined ? changes.tags ?? [] : project.tags,
+            notes: changes.notes !== undefined ? changes.notes ?? "" : project.notes
+          };
+        })
+      )
+    );
   }
 
   function applyThreadOverrideToState(threadId: string, changes: LocalOverrideInput) {
@@ -1082,6 +1178,80 @@ export default function App() {
   function handleCancelThreadTitleEdit() {
     setThreadTitleDraft(selectedThread?.title ?? "");
     setIsThreadTitleEditing(false);
+  }
+
+  function handleCancelProjectTitleEdit() {
+    setProjectTitleDraft(selectedProject?.displayName ?? "");
+    setIsProjectTitleEditing(false);
+  }
+
+  async function handleAddProjectTag() {
+    if (!selectedProject || !projectTagInputDraft.trim()) {
+      return;
+    }
+
+    const nextTags = appendTagDraft(projectTagsDraft, projectTagInputDraft);
+
+    if (areStringListsEqual(nextTags, projectTagsDraft)) {
+      setProjectTagInputDraft("");
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        tags: nextTags
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        tags: nextTags
+      });
+      setProjectTagInputDraft("");
+      setProjectTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  async function handleRemoveProjectTag(tagToRemove: string) {
+    if (!selectedProject) {
+      return;
+    }
+
+    const nextTags = projectTagsDraft.filter((tag) => tag !== tagToRemove);
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        tags: nextTags
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        tags: nextTags
+      });
+      setProjectTagsDraft(nextTags);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  function handleProjectTagInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    void handleAddProjectTag();
+  }
+
+  function handleResetProjectMemoDraft() {
+    setProjectNotesDraft(selectedProject?.notes ?? "");
   }
 
   async function handleAddThreadTag() {
@@ -1225,6 +1395,126 @@ export default function App() {
 
   function handleResetTurnMemoDraft() {
     setTurnNotesDraft(selectedTurn?.notes ?? "");
+  }
+
+  async function handleSaveProjectTitle() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    const nextDisplayName = resolveProjectDisplayNameOverride(
+      projectTitleDraft,
+      selectedProject.sourceDisplayName
+    );
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        displayName: nextDisplayName
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        displayName: nextDisplayName
+      });
+      setIsProjectTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  async function handleResetProjectTitle() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        displayName: null
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        displayName: null
+      });
+      setIsProjectTitleEditing(false);
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  async function handleSaveProjectMemo() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        notes: normalizedProjectNotesDraft
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        notes: normalizedProjectNotesDraft
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  async function handleClearProjectMemo() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        notes: ""
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        notes: ""
+      });
+      setProjectNotesDraft("");
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
+  }
+
+  async function handleToggleProjectPin() {
+    if (!selectedProject) {
+      return;
+    }
+
+    setIsSavingProjectOverride(true);
+    setLoadError(null);
+
+    const nextPinned = !selectedProject.isPinned;
+
+    try {
+      await window.codexCardFeed.saveProjectOverride(selectedProject.id, {
+        isPinned: nextPinned
+      });
+      applyProjectOverrideToState(selectedProject.id, {
+        isPinned: nextPinned
+      });
+    } catch (error) {
+      setLoadError(getErrorMessage(error));
+    } finally {
+      setIsSavingProjectOverride(false);
+    }
   }
 
   async function handleSaveThreadTitle() {
@@ -1759,27 +2049,41 @@ export default function App() {
             <div className="sidebar-project-list">
               {sidebarProjects.map((project) => (
                 <article className="sidebar-project-group" key={project.id}>
-                  <button
-                    className={`sidebar-project-button ${
-                      selectedThread?.projectId === project.id ? "is-active" : ""
-                    }`}
-                    onClick={() => handleProjectToggle(project.id)}
-                    type="button"
-                  >
-                    <div className="sidebar-project-heading">
-                      <strong>{project.displayName}</strong>
-                      <span className="sidebar-project-caret" aria-hidden="true">
-                        {expandedProjectIds[project.id] ? "▾" : "▸"}
-                      </span>
+                  <div className="sidebar-project-card">
+                    <button
+                      className={`sidebar-project-button ${
+                        selectedThread?.projectId === project.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleProjectToggle(project.id)}
+                      type="button"
+                    >
+                      <div className="sidebar-project-heading">
+                        <div className="sidebar-project-title-row">
+                          <strong>{project.displayName}</strong>
+                          {project.isPinned ? (
+                            <span className="sidebar-pin-badge">Pinned</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="sidebar-item-meta">
+                        <span>
+                          {formatCountLabel(project.threadCount, "thread")} /{" "}
+                          {formatCountLabel(project.turnCount, "turn")}
+                        </span>
+                        <span>{formatDateTime(project.lastActivityAt)}</span>
+                      </div>
+                    </button>
+                    <div className="sidebar-project-actions">
+                      <button
+                        aria-label={`Manage ${project.displayName}`}
+                        className="sidebar-project-action-button"
+                        onClick={() => handleOpenProjectModal(project.id)}
+                        type="button"
+                      >
+                        ...
+                      </button>
                     </div>
-                    <div className="sidebar-item-meta">
-                      <span>
-                        {formatCountLabel(project.threadCount, "thread")} /{" "}
-                        {formatCountLabel(project.turnCount, "turn")}
-                      </span>
-                      <span>{formatDateTime(project.lastActivityAt)}</span>
-                    </div>
-                  </button>
+                  </div>
 
                   {expandedProjectIds[project.id] ? (
                     <div className="sidebar-project-thread-list">
@@ -1839,36 +2143,48 @@ export default function App() {
               <div className="sidebar-project-list">
                 {historicalProjects.map((project) => (
                   <article className="sidebar-project-group" key={project.id}>
-                    <button
-                      className={`sidebar-project-button ${
-                        selectedThread?.projectId === project.id ? "is-active" : ""
-                      }`}
-                      onClick={() => handleProjectToggle(project.id)}
-                      type="button"
-                    >
-                      <div className="sidebar-project-heading">
-                        <div className="sidebar-project-title-row">
-                          <strong>{project.displayName}</strong>
-                          <span
-                            className={`sidebar-status-badge ${
-                              project.projectStatus === "removed" ? "is-removed" : "is-historical"
-                            }`}
-                          >
-                            {project.projectStatus}
-                          </span>
+                    <div className="sidebar-project-card">
+                      <button
+                        className={`sidebar-project-button ${
+                          selectedThread?.projectId === project.id ? "is-active" : ""
+                        }`}
+                        onClick={() => handleProjectToggle(project.id)}
+                        type="button"
+                      >
+                        <div className="sidebar-project-heading">
+                          <div className="sidebar-project-title-row">
+                            <strong>{project.displayName}</strong>
+                            {project.isPinned ? (
+                              <span className="sidebar-pin-badge">Pinned</span>
+                            ) : null}
+                            <span
+                              className={`sidebar-status-badge ${
+                                project.projectStatus === "removed" ? "is-removed" : "is-historical"
+                              }`}
+                            >
+                              {project.projectStatus}
+                            </span>
+                          </div>
                         </div>
-                        <span className="sidebar-project-caret" aria-hidden="true">
-                          {expandedProjectIds[project.id] ? "v" : ">"}
-                        </span>
+                        <div className="sidebar-item-meta">
+                          <span>
+                            {formatCountLabel(project.threadCount, "thread")} /{" "}
+                            {formatCountLabel(project.turnCount, "turn")}
+                          </span>
+                          <span>{formatDateTime(project.lastActivityAt)}</span>
+                        </div>
+                      </button>
+                      <div className="sidebar-project-actions">
+                        <button
+                          aria-label={`Manage ${project.displayName}`}
+                          className="sidebar-project-action-button"
+                          onClick={() => handleOpenProjectModal(project.id)}
+                          type="button"
+                        >
+                          ...
+                        </button>
                       </div>
-                      <div className="sidebar-item-meta">
-                        <span>
-                          {formatCountLabel(project.threadCount, "thread")} /{" "}
-                          {formatCountLabel(project.turnCount, "turn")}
-                        </span>
-                        <span>{formatDateTime(project.lastActivityAt)}</span>
-                      </div>
-                    </button>
+                    </div>
 
                     {expandedProjectIds[project.id] ? (
                       <div className="sidebar-project-thread-list">
@@ -2196,12 +2512,14 @@ export default function App() {
             rightPanelMode === "turns" ? (
               <div className="selection-list">
                 {turns.map((turn) => (
-                  <article
+                  <button
                     data-turn-card-id={turn.id}
                     key={turn.id}
-                    className={`selection-button selection-card ${
+                    className={`selection-button ${
                       selectedTurnId === turn.id ? "is-active" : ""
                     }`}
+                    onClick={() => handleOpenTurnDetail(turn.id)}
+                    type="button"
                   >
                     <div className="selection-copy">
                       <div className="selection-topline">
@@ -2235,17 +2553,8 @@ export default function App() {
                           {formatTokenLabel(turn.totalTokens)}
                         </span>
                       </div>
-                      <div className="turn-card-buttons">
-                        <button
-                          className="secondary-button"
-                          onClick={() => handleOpenTurnDetail(turn.id)}
-                          type="button"
-                        >
-                          View detail
-                        </button>
-                      </div>
                     </div>
-                  </article>
+                  </button>
                 ))}
               </div>
             ) : (
@@ -2284,6 +2593,262 @@ export default function App() {
           )}
         </section>
       </section>
+
+      {selectedProject ? (
+        <div className="modal-overlay" onClick={handleCloseProjectModal} role="presentation">
+          <section
+            className="card modal-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="workspace-kicker">Project detail</p>
+                <h2>{selectedProject.displayName}</h2>
+                <p className="muted">Local project metadata and source details.</p>
+              </div>
+              <div className="modal-header-actions">
+                <button
+                  className="modal-close"
+                  onClick={handleCloseProjectModal}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div className="modal-scroll">
+              <div className="detail-body">
+                <section className="detail-meta-panel">
+                  <div className="detail-management-bar">
+                    <div className="detail-management-copy">
+                      <p className="management-kicker">Local project title</p>
+                      {isProjectTitleEditing ? (
+                        <input
+                          className="management-title-input"
+                          onChange={(event) => setProjectTitleDraft(event.target.value)}
+                          placeholder={selectedProject.sourceDisplayName}
+                          type="text"
+                          value={projectTitleDraft}
+                        />
+                      ) : (
+                        <strong className="detail-management-title">
+                          {selectedProject.displayName}
+                        </strong>
+                      )}
+                      {selectedProject.displayName !== selectedProject.sourceDisplayName ? (
+                        <p className="management-subcopy muted">{`Original: ${selectedProject.sourceDisplayName}`}</p>
+                      ) : (
+                        <p className="management-subcopy muted">
+                          No custom project title stored.
+                        </p>
+                      )}
+                    </div>
+                    <div className="detail-management-actions">
+                      <button
+                        className={`secondary-button ${selectedProject.isPinned ? "is-active" : ""}`}
+                        disabled={isSavingProjectOverride}
+                        onClick={() => void handleToggleProjectPin()}
+                        type="button"
+                      >
+                        {selectedProject.isPinned ? "Unpin" : "Pin"}
+                      </button>
+                      {isProjectTitleEditing ? (
+                        <>
+                          <button
+                            className="secondary-button"
+                            disabled={isSavingProjectOverride || !canSaveProjectTitle}
+                            onClick={() => void handleSaveProjectTitle()}
+                            type="button"
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="secondary-button"
+                            disabled={isSavingProjectOverride}
+                            onClick={handleCancelProjectTitleEdit}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingProjectOverride}
+                          onClick={() => setIsProjectTitleEditing(true)}
+                          type="button"
+                        >
+                          Edit title
+                        </button>
+                      )}
+                      {canResetProjectTitle ? (
+                        <button
+                          className="secondary-button"
+                          disabled={isSavingProjectOverride}
+                          onClick={() => void handleResetProjectTitle()}
+                          type="button"
+                        >
+                          Use original
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <section className="local-metadata-panel local-metadata-panel-detail">
+                    <div className="local-metadata-shell-header">
+                      <div>
+                        <p className="management-kicker">Local metadata</p>
+                        <p className="muted">Tags and memo are stored only in CodexCardFeed.</p>
+                      </div>
+                      <button
+                        aria-expanded={!isProjectMetadataCollapsed}
+                        className="secondary-button"
+                        onClick={() => setIsProjectMetadataCollapsed((value) => !value)}
+                        type="button"
+                      >
+                        {isProjectMetadataCollapsed ? "Show" : "Hide"}
+                      </button>
+                    </div>
+
+                    {!isProjectMetadataCollapsed ? (
+                      <>
+                        <div className="metadata-field">
+                          <div className="metadata-section-header">
+                            <label className="metadata-label" htmlFor="project-tags-input">
+                              Tags
+                            </label>
+                            <div className="metadata-section-actions">
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingProjectOverride || !canAddProjectTag}
+                                onClick={() => void handleAddProjectTag()}
+                                type="button"
+                              >
+                                Add
+                              </button>
+                            </div>
+                          </div>
+                          <div className="metadata-input-row">
+                            <input
+                              id="project-tags-input"
+                              className="metadata-input"
+                              onChange={(event) => setProjectTagInputDraft(event.target.value)}
+                              onKeyDown={handleProjectTagInputKeyDown}
+                              placeholder="Add one tag and press Enter"
+                              type="text"
+                              value={projectTagInputDraft}
+                            />
+                          </div>
+                          {projectTagsDraft.length ? (
+                            <div className="tag-chip-list">
+                              {projectTagsDraft.map((tag) => (
+                                <span className="tag-chip" key={tag}>
+                                  <span>{tag}</span>
+                                  <button
+                                    aria-label={`Remove ${tag} tag`}
+                                    className="tag-chip-remove"
+                                    onClick={() => void handleRemoveProjectTag(tag)}
+                                    type="button"
+                                  >
+                                    x
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="muted">No local tags.</p>
+                          )}
+                        </div>
+
+                        <div className="metadata-field">
+                          <div className="metadata-section-header">
+                            <label className="metadata-label" htmlFor="project-notes-input">
+                              Memo
+                            </label>
+                            <div className="metadata-section-actions">
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingProjectOverride || !canSaveProjectMemo}
+                                onClick={() => void handleSaveProjectMemo()}
+                                type="button"
+                              >
+                                Save memo
+                              </button>
+                              <button
+                                className="secondary-button"
+                                disabled={isSavingProjectOverride || !canSaveProjectMemo}
+                                onClick={handleResetProjectMemoDraft}
+                                type="button"
+                              >
+                                Revert memo
+                              </button>
+                              {canClearProjectMemo ? (
+                                <button
+                                  className="secondary-button"
+                                  disabled={isSavingProjectOverride}
+                                  onClick={() => void handleClearProjectMemo()}
+                                  type="button"
+                                >
+                                  Clear memo
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                          <textarea
+                            id="project-notes-input"
+                            className="metadata-textarea"
+                            onChange={(event) => setProjectNotesDraft(event.target.value)}
+                            placeholder="Write a local memo for this project."
+                            rows={4}
+                            value={projectNotesDraft}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+                  </section>
+
+                  <div className="detail-meta-header">
+                    <strong>{selectedProject.displayName}</strong>
+                    <div className="detail-meta-pills">
+                      {selectedProject.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                      <span className="count-pill">
+                        {formatCountLabel(selectedProject.threadCount, "thread")}
+                      </span>
+                      <span className="count-pill">
+                        {formatCountLabel(selectedProject.turnCount, "turn")}
+                      </span>
+                    </div>
+                  </div>
+
+                  <dl className="detail-meta">
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{selectedProject.projectStatus}</dd>
+                    </div>
+                    <div>
+                      <dt>Last activity</dt>
+                      <dd>{formatDateTime(selectedProject.lastActivityAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Source kind</dt>
+                      <dd>{selectedProject.sourceKind}</dd>
+                    </div>
+                    <div>
+                      <dt>Sessions</dt>
+                      <dd>{formatCountLabel(selectedProject.sourceSessionPaths.length, "file")}</dd>
+                    </div>
+                    <div>
+                      <dt>Source path</dt>
+                      <dd>{selectedProject.sourcePath}</dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {isDiagnosticsModalOpen ? (
         <div className="modal-overlay" onClick={handleCloseDiagnosticsModal} role="presentation">

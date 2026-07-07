@@ -1,6 +1,6 @@
 const { DatabaseSync } = require("node:sqlite");
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 function createMetaTable(database) {
   database.exec(`
@@ -244,12 +244,29 @@ function migrationFive(database) {
   setMetaValue(database, "schema_version", "5");
 }
 
+function migrationSix(database) {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS project_overrides (
+      project_id TEXT PRIMARY KEY,
+      display_name TEXT,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+  `);
+
+  setMetaValue(database, "schema_version", "6");
+}
+
 const migrations = [
   { version: 1, apply: migrationOne },
   { version: 2, apply: migrationTwo },
   { version: 3, apply: migrationThree },
   { version: 4, apply: migrationFour },
-  { version: 5, apply: migrationFive }
+  { version: 5, apply: migrationFive },
+  { version: 6, apply: migrationSix }
 ];
 
 function runMigrations(database) {
@@ -338,9 +355,13 @@ function listProjects(database) {
     .prepare(`
       SELECT
         projects.id,
-        projects.display_name,
+        COALESCE(project_overrides.display_name, projects.display_name) AS display_name,
+        projects.display_name AS source_display_name,
+        project_overrides.tags_json,
+        project_overrides.notes,
         projects.source_kind,
         projects.source_path,
+        MAX(COALESCE(project_overrides.pinned, 0)) AS is_pinned,
         json_group_array(DISTINCT CASE
           WHEN threads.source_session_path IS NOT NULL
             AND threads.source_session_path <> ''
@@ -350,6 +371,8 @@ function listProjects(database) {
         COUNT(DISTINCT turns.id) AS turn_count,
         MAX(COALESCE(threads.updated_at, threads.last_seen_at)) AS last_activity_at
       FROM projects
+      LEFT JOIN project_overrides
+        ON project_overrides.project_id = projects.id
       LEFT JOIN threads
         ON threads.project_id = projects.id
       LEFT JOIN turns
@@ -357,19 +380,27 @@ function listProjects(database) {
       WHERE projects.source_kind = 'workspace'
       GROUP BY
         projects.id,
+        project_overrides.display_name,
+        project_overrides.tags_json,
+        project_overrides.notes,
         projects.display_name,
         projects.source_kind,
         projects.source_path
       ORDER BY
+        is_pinned DESC,
         last_activity_at DESC,
-        projects.display_name ASC
+        display_name ASC
     `)
     .all()
     .map((row) => ({
       id: row.id,
       displayName: row.display_name,
+      sourceDisplayName: row.source_display_name,
+      tags: parseOverrideTagsJson(row.tags_json),
+      notes: typeof row.notes === "string" ? row.notes : "",
       sourceKind: row.source_kind,
       sourcePath: row.source_path,
+      isPinned: Boolean(row.is_pinned),
       sourceSessionPaths: JSON.parse(row.source_session_paths_json ?? "[]").filter(
         (value) => typeof value === "string" && value.trim()
       ),
@@ -779,6 +810,102 @@ function saveThreadOverride(database, threadId, changes) {
     );
 }
 
+function saveProjectOverride(database, projectId, changes) {
+  if (typeof projectId !== "string" || !projectId.trim()) {
+    throw new Error("Project ID cannot be empty.");
+  }
+
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    throw new Error("Project override payload must be an object.");
+  }
+
+  const baseProject = database.prepare("SELECT id FROM projects WHERE id = ?").get(projectId);
+
+  if (!baseProject) {
+    throw new Error("Project not found.");
+  }
+
+  const nextDisplayName = normalizeOverrideDisplayTitle(
+    changes.displayName,
+    "Project display name"
+  );
+  const nextPinned = normalizeOverridePinnedValue(changes.isPinned, "Project pin state");
+  const nextTagsJson = normalizeOverrideTagsValue(changes.tags, "Project tags");
+  const nextNotes = normalizeOverrideNotesValue(changes.notes, "Project notes");
+
+  if (
+    nextDisplayName === undefined &&
+    nextPinned === undefined &&
+    nextTagsJson === undefined &&
+    nextNotes === undefined
+  ) {
+    return;
+  }
+
+  const existingOverride = database
+    .prepare(`
+      SELECT
+        display_name,
+        tags_json,
+        pinned,
+        notes
+      FROM project_overrides
+      WHERE project_id = ?
+    `)
+    .get(projectId);
+  const resolvedDisplayName =
+    nextDisplayName !== undefined ? nextDisplayName : existingOverride?.display_name ?? null;
+  const resolvedPinned =
+    nextPinned !== undefined ? nextPinned : Number(existingOverride?.pinned ?? 0);
+  const resolvedTagsJson =
+    nextTagsJson !== undefined
+      ? nextTagsJson
+      : JSON.stringify(parseOverrideTagsJson(existingOverride?.tags_json));
+  const resolvedNotes =
+    nextNotes !== undefined
+      ? nextNotes
+      : typeof existingOverride?.notes === "string"
+        ? existingOverride.notes.trim()
+        : "";
+
+  if (
+    resolvedDisplayName === null &&
+    resolvedPinned === 0 &&
+    resolvedTagsJson === "[]" &&
+    !resolvedNotes
+  ) {
+    database.prepare("DELETE FROM project_overrides WHERE project_id = ?").run(projectId);
+    return;
+  }
+
+  database
+    .prepare(`
+      INSERT INTO project_overrides (
+        project_id,
+        display_name,
+        tags_json,
+        pinned,
+        notes,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        tags_json = excluded.tags_json,
+        pinned = excluded.pinned,
+        notes = excluded.notes,
+        updated_at = excluded.updated_at
+    `)
+    .run(
+      projectId,
+      resolvedDisplayName,
+      resolvedTagsJson,
+      resolvedPinned,
+      resolvedNotes,
+      new Date().toISOString()
+    );
+}
+
 function saveTurnOverride(database, turnId, changes) {
   if (typeof turnId !== "string" || !turnId.trim()) {
     throw new Error("Turn ID cannot be empty.");
@@ -899,6 +1026,7 @@ module.exports = {
   listThreadsByProject,
   listTurnsByThread,
   listItemsByTurn,
+  saveProjectOverride,
   saveThreadOverride,
   saveTurnOverride
 };

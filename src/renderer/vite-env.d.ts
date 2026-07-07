@@ -87,6 +87,10 @@ type ImportResult = {
 type ProjectListItem = {
   id: string;
   displayName: string;
+  sourceDisplayName: string;
+  tags: string[];
+  notes: string;
+  isPinned: boolean;
   sourceKind: string;
   sourcePath: string;
   sourceSessionPaths: string[];
@@ -94,6 +98,13 @@ type ProjectListItem = {
   threadCount: number;
   turnCount: number;
   lastActivityAt: string | null;
+};
+
+type ProjectOverrideInput = {
+  displayName?: string | null;
+  isPinned?: boolean;
+  tags?: string[] | null;
+  notes?: string | null;
 };
 
 type ThreadListItem = {
@@ -234,6 +245,7 @@ interface Window {
     getShellInfo(): Promise<ShellInfo>;
     importCodexSessions(): Promise<ImportResult>;
     openCodexThread(threadId: string): Promise<void>;
+    saveProjectOverride(projectId: string, changes: ProjectOverrideInput): Promise<void>;
     saveThreadOverride(threadId: string, changes: LocalOverrideInput): Promise<void>;
     saveTurnOverride(turnId: string, changes: LocalOverrideInput): Promise<void>;
     updateCodexHome(codexHome: string): Promise<ShellInfo>;

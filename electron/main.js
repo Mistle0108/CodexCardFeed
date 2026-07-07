@@ -8,6 +8,7 @@ const {
   listThreads,
   listTurnsByThread,
   listItemsByTurn,
+  saveProjectOverride: persistProjectOverride,
   saveThreadOverride: persistThreadOverride,
   saveTurnOverride: persistTurnOverride
 } = require("./db");
@@ -197,6 +198,9 @@ app.whenReady().then(() => {
     },
     openCodexThread(threadId) {
       return openCodexThread(threadId);
+    },
+    saveProjectOverride(projectId, changes) {
+      return persistProjectOverride(databaseState.database, projectId, changes);
     },
     saveThreadOverride(threadId, changes) {
       return persistThreadOverride(databaseState.database, threadId, changes);
