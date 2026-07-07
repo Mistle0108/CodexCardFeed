@@ -846,6 +846,12 @@ select {
   gap: 10px;
 }
 
+.panel-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -880,6 +886,11 @@ select {
 
 .panel-toolbar-meta {
   flex: 0 0 auto;
+}
+
+.panel-search-input {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .workspace-kicker {
@@ -1982,6 +1993,7 @@ select {
   .question-card-meta,
   .turn-card-actions,
   .panel-toolbar,
+  .panel-search-row,
   .modal-header,
   .diagnosis-section-header,
   .diagnosis-issue-header,

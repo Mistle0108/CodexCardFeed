@@ -228,6 +228,14 @@ function normalizeMetadataTagQuery(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeThreadSearchTerms(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
 function hasActiveMetadataFilters(filters: MetadataFilterState) {
   return Boolean(filters.tagQuery || filters.pinnedOnly || filters.memoOnly);
 }
@@ -257,6 +265,22 @@ function groupThreadsByProjectId(rows: ThreadListItem[]) {
     groups[thread.projectId].push(thread);
     return groups;
   }, {});
+}
+
+function matchesTurnThreadSearch(turn: TurnListItem, searchTerms: string[]) {
+  if (!searchTerms.length) {
+    return true;
+  }
+
+  const haystack = [
+    turn.displayTitle ?? "",
+    turn.searchUserText,
+    turn.searchFinalAnswerText
+  ]
+    .join("\n\n")
+    .toLowerCase();
+
+  return searchTerms.every((term) => haystack.includes(term));
 }
 
 function resolveProjectDisplayNameOverride(draftValue: string, sourceDisplayName: string) {
@@ -784,6 +808,7 @@ export default function App() {
   const [metadataTagFilter, setMetadataTagFilter] = useState("");
   const [isPinnedFilterActive, setIsPinnedFilterActive] = useState(false);
   const [isMemoFilterActive, setIsMemoFilterActive] = useState(false);
+  const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [rightPanelMode, setRightPanelMode] = useState<"turns" | "questions">("turns");
   const [expandedProjectIds, setExpandedProjectIds] = useState(() =>
     readStoredExpandedProjectIds()
@@ -795,14 +820,16 @@ export default function App() {
     threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
   const normalizedMetadataTagFilter = normalizeMetadataTagQuery(metadataTagFilter);
+  const normalizedThreadSearchTerms = normalizeThreadSearchTerms(threadSearchQuery);
   const metadataFilters: MetadataFilterState = {
     tagQuery: normalizedMetadataTagFilter,
     pinnedOnly: isPinnedFilterActive,
     memoOnly: isMemoFilterActive
   };
   const isMetadataFilterActive = hasActiveMetadataFilters(metadataFilters);
-  const visibleTurns = isMetadataFilterActive
-    ? turns.filter((turn) => matchesMetadataFilters(turn, metadataFilters))
+  const isThreadSearchActive = normalizedThreadSearchTerms.length > 0;
+  const visibleTurns = isThreadSearchActive
+    ? turns.filter((turn) => matchesTurnThreadSearch(turn, normalizedThreadSearchTerms))
     : turns;
   const questionTurns = visibleTurns;
   const primaryTurnItems = turnItems.filter((item) => isPrimaryDetailItem(item));
@@ -1110,6 +1137,10 @@ export default function App() {
     setThreadTagsDraft(selectedThread?.tags ?? []);
     setThreadNotesDraft(selectedThread?.notes ?? "");
   }, [selectedThread?.id, selectedThread?.title, selectedThread?.notes, selectedThread?.tags]);
+
+  useEffect(() => {
+    setThreadSearchQuery("");
+  }, [selectedThreadId]);
 
   useEffect(() => {
     setIsTurnTitleEditing(false);
@@ -2131,7 +2162,7 @@ export default function App() {
                 </button>
               ) : null}
             </div>
-            <p className="sidebar-filter-copy">Applies to projects, chats, and turns.</p>
+            <p className="sidebar-filter-copy">Applies to projects, chats, and thread lists.</p>
             <input
               className="path-panel-input sidebar-filter-input"
               onChange={(event) => setMetadataTagFilter(event.target.value)}
@@ -2665,6 +2696,25 @@ export default function App() {
                 : "No thread selected"}
             </p>
           </div>
+          <div className="panel-search-row">
+            <input
+              className="path-panel-input panel-search-input"
+              disabled={!selectedThread}
+              onChange={(event) => setThreadSearchQuery(event.target.value)}
+              placeholder="Search this thread"
+              type="text"
+              value={threadSearchQuery}
+            />
+            {isThreadSearchActive ? (
+              <button
+                className="sidebar-collapse-toggle"
+                onClick={() => setThreadSearchQuery("")}
+                type="button"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <section className="turn-list-panel">
@@ -2746,11 +2796,11 @@ export default function App() {
             <p className="empty-state">
               {selectedThread
                 ? rightPanelMode === "turns"
-                  ? isMetadataFilterActive
-                    ? "No turns match the current filters."
+                  ? isThreadSearchActive
+                    ? "No turns match the current search."
                     : "No turns were found for this thread."
-                  : isMetadataFilterActive
-                    ? "No questions match the current filters."
+                  : isThreadSearchActive
+                    ? "No questions match the current search."
                     : "No questions were found for this thread."
                 : "Choose a thread from the sidebar to load turn cards."}
             </p>

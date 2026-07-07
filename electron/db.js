@@ -491,6 +491,18 @@ function listTurnsByThread(database, threadId) {
         turn_overrides.notes,
         turns.first_user_snippet,
         (
+          SELECT group_concat(search_user_items.text_content, char(10) || char(10))
+          FROM (
+            SELECT user_items.text_content
+            FROM items AS user_items
+            WHERE user_items.turn_id = turns.id
+              AND user_items.role = 'user'
+              AND user_items.kind <> 'message:bootstrap_context'
+              AND COALESCE(user_items.text_content, '') <> ''
+            ORDER BY user_items.ordinal ASC
+          ) AS search_user_items
+        ) AS search_user_text,
+        (
           SELECT assistant_items.text_content
           FROM items AS assistant_items
           WHERE assistant_items.turn_id = turns.id
@@ -505,6 +517,17 @@ function listTurnsByThread(database, threadId) {
             assistant_items.ordinal ASC
           LIMIT 1
         ) AS first_assistant_snippet,
+        (
+          SELECT group_concat(search_answer_items.text_content, char(10) || char(10))
+          FROM (
+            SELECT answer_items.text_content
+            FROM items AS answer_items
+            WHERE answer_items.turn_id = turns.id
+              AND answer_items.kind = 'message:final_answer'
+              AND COALESCE(answer_items.text_content, '') <> ''
+            ORDER BY answer_items.ordinal ASC
+          ) AS search_answer_items
+        ) AS search_final_answer_text,
         turns.status,
         turns.started_at,
         turns.completed_at,
@@ -555,6 +578,8 @@ function listTurnsByThread(database, threadId) {
       notes: typeof row.notes === "string" ? row.notes : "",
       firstUserSnippet: row.first_user_snippet,
       firstAssistantSnippet: row.first_assistant_snippet ?? "",
+      searchUserText: row.search_user_text ?? row.first_user_snippet ?? "",
+      searchFinalAnswerText: row.search_final_answer_text ?? row.first_assistant_snippet ?? "",
       status: row.status,
       startedAt: row.started_at ?? null,
       completedAt: row.completed_at ?? null,
