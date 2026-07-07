@@ -25,6 +25,19 @@ function formatCountLabel(count: number, singular: string, plural = `${singular}
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function formatFilteredCountLabel(
+  visibleCount: number,
+  totalCount: number,
+  singular: string,
+  plural = `${singular}s`
+) {
+  if (visibleCount === totalCount) {
+    return formatCountLabel(visibleCount, singular, plural);
+  }
+
+  return `${visibleCount} / ${totalCount} ${totalCount === 1 ? singular : plural}`;
+}
+
 function formatInteger(value: number) {
   return integerFormatter.format(value);
 }
@@ -139,6 +152,18 @@ type ItemPresentation = {
   textContent: string | null;
 };
 
+type MetadataFilterState = {
+  tagQuery: string;
+  pinnedOnly: boolean;
+  memoOnly: boolean;
+};
+
+type MetadataFilterable = {
+  tags: string[];
+  notes: string;
+  isPinned: boolean;
+};
+
 function resolveSelectedId<T extends { id: string }>(
   rows: T[],
   preferredId: string | null
@@ -197,6 +222,41 @@ function getTurnHeading(turn: TurnListItem) {
   return turn.displayTitle
     ? `Turn ${turn.ordinal} / ${turn.displayTitle}`
     : `Turn ${turn.ordinal}`;
+}
+
+function normalizeMetadataTagQuery(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function hasActiveMetadataFilters(filters: MetadataFilterState) {
+  return Boolean(filters.tagQuery || filters.pinnedOnly || filters.memoOnly);
+}
+
+function matchesMetadataFilters(item: MetadataFilterable, filters: MetadataFilterState) {
+  if (filters.pinnedOnly && !item.isPinned) {
+    return false;
+  }
+
+  if (filters.memoOnly && !item.notes.trim()) {
+    return false;
+  }
+
+  if (filters.tagQuery) {
+    return item.tags.some((tag) => tag.toLowerCase().includes(filters.tagQuery));
+  }
+
+  return true;
+}
+
+function groupThreadsByProjectId(rows: ThreadListItem[]) {
+  return rows.reduce<Record<string, ThreadListItem[]>>((groups, thread) => {
+    if (!groups[thread.projectId]) {
+      groups[thread.projectId] = [];
+    }
+
+    groups[thread.projectId].push(thread);
+    return groups;
+  }, {});
 }
 
 function resolveProjectDisplayNameOverride(draftValue: string, sourceDisplayName: string) {
@@ -721,6 +781,9 @@ export default function App() {
   const [isChatsCollapsed, setIsChatsCollapsed] = useState(() =>
     readStoredCollapsedState(CHATS_COLLAPSED_STORAGE_KEY)
   );
+  const [metadataTagFilter, setMetadataTagFilter] = useState("");
+  const [isPinnedFilterActive, setIsPinnedFilterActive] = useState(false);
+  const [isMemoFilterActive, setIsMemoFilterActive] = useState(false);
   const [rightPanelMode, setRightPanelMode] = useState<"turns" | "questions">("turns");
   const [expandedProjectIds, setExpandedProjectIds] = useState(() =>
     readStoredExpandedProjectIds()
@@ -731,7 +794,17 @@ export default function App() {
   const selectedThread =
     threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
-  const questionTurns = turns;
+  const normalizedMetadataTagFilter = normalizeMetadataTagQuery(metadataTagFilter);
+  const metadataFilters: MetadataFilterState = {
+    tagQuery: normalizedMetadataTagFilter,
+    pinnedOnly: isPinnedFilterActive,
+    memoOnly: isMemoFilterActive
+  };
+  const isMetadataFilterActive = hasActiveMetadataFilters(metadataFilters);
+  const visibleTurns = isMetadataFilterActive
+    ? turns.filter((turn) => matchesMetadataFilters(turn, metadataFilters))
+    : turns;
+  const questionTurns = visibleTurns;
   const primaryTurnItems = turnItems.filter((item) => isPrimaryDetailItem(item));
   const additionalTurnItems = turnItems.filter((item) => !isPrimaryDetailItem(item));
   const integrityFailedChecks =
@@ -746,8 +819,29 @@ export default function App() {
         ...sessionDiagnosisReport.parseProblems
       ]
     : [];
-  const sidebarProjects = projects.filter((project) => project.projectStatus === "active");
-  const historicalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
+  const activeProjects = projects.filter((project) => project.projectStatus === "active");
+  const allProjectIds = new Set(projects.map((project) => project.id));
+  const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
+  const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const matchingProjectThreads = isMetadataFilterActive
+    ? projectThreads.filter((thread) => matchesMetadataFilters(thread, metadataFilters))
+    : projectThreads;
+  const matchingChatThreads = isMetadataFilterActive
+    ? chatThreads.filter((thread) => matchesMetadataFilters(thread, metadataFilters))
+    : chatThreads;
+  const matchingProjectThreadsByProjectId = groupThreadsByProjectId(matchingProjectThreads);
+  const threadsByProjectId = groupThreadsByProjectId(projectThreads);
+  const sidebarProjects = activeProjects.filter((project) => {
+    if (!isMetadataFilterActive) {
+      return true;
+    }
+
+    return (
+      matchesMetadataFilters(project, metadataFilters) ||
+      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
+    );
+  });
+  const allHistoricalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
     .sort((left, right) => {
       if (left.projectStatus === right.projectStatus) {
         return 0;
@@ -763,9 +857,16 @@ export default function App() {
 
       return 0;
     });
-  const allProjectIds = new Set(projects.map((project) => project.id));
-  const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
-  const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const historicalProjects = allHistoricalProjects.filter((project) => {
+    if (!isMetadataFilterActive) {
+      return true;
+    }
+
+    return (
+      matchesMetadataFilters(project, metadataFilters) ||
+      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
+    );
+  });
   const normalizedProjectNotesDraft = normalizeNoteDraft(projectNotesDraft);
   const normalizedThreadNotesDraft = normalizeNoteDraft(threadNotesDraft);
   const normalizedTurnNotesDraft = normalizeNoteDraft(turnNotesDraft);
@@ -816,17 +917,6 @@ export default function App() {
     selectedTurn && normalizedTurnNotesDraft !== selectedTurn.notes
   );
   const canClearTurnMemo = Boolean(selectedTurn?.notes);
-  const threadsByProjectId = projectThreads.reduce<Record<string, ThreadListItem[]>>(
-    (groups, thread) => {
-      if (!groups[thread.projectId]) {
-        groups[thread.projectId] = [];
-      }
-
-      groups[thread.projectId].push(thread);
-      return groups;
-    },
-    {}
-  );
 
   function revealThreadSelection(threadId: string) {
     const nextThread = threads.find((thread) => thread.id === threadId) ?? null;
@@ -1079,6 +1169,12 @@ export default function App() {
 
   function handleOpenProjectModal(projectId: string) {
     setProjectModalProjectId(projectId);
+  }
+
+  function handleResetMetadataFilters() {
+    setMetadataTagFilter("");
+    setIsPinnedFilterActive(false);
+    setIsMemoFilterActive(false);
   }
 
   function handleThreadSelect(threadId: string) {
@@ -2021,6 +2117,46 @@ export default function App() {
         </button>
 
         <div className="sidebar-scroll-area">
+        <section className="path-panel sidebar-filter-panel">
+          <section className="path-panel-item">
+            <div className="path-panel-item-header">
+              <strong>Filters</strong>
+              {isMetadataFilterActive ? (
+                <button
+                  className="sidebar-collapse-toggle"
+                  onClick={handleResetMetadataFilters}
+                  type="button"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            <p className="sidebar-filter-copy">Applies to projects, chats, and turns.</p>
+            <input
+              className="path-panel-input sidebar-filter-input"
+              onChange={(event) => setMetadataTagFilter(event.target.value)}
+              placeholder="Filter by tag"
+              type="text"
+              value={metadataTagFilter}
+            />
+            <div className="sidebar-filter-actions">
+              <button
+                className={`sidebar-filter-chip ${isPinnedFilterActive ? "is-active" : ""}`}
+                onClick={() => setIsPinnedFilterActive((value) => !value)}
+                type="button"
+              >
+                Pinned
+              </button>
+              <button
+                className={`sidebar-filter-chip ${isMemoFilterActive ? "is-active" : ""}`}
+                onClick={() => setIsMemoFilterActive((value) => !value)}
+                type="button"
+              >
+                Has memo
+              </button>
+            </div>
+          </section>
+        </section>
 
         <section
           className={`sidebar-section sidebar-projects ${
@@ -2030,7 +2166,7 @@ export default function App() {
           <div className="sidebar-section-header">
             <div>
               <h2>Projects</h2>
-              <p>{formatCountLabel(sidebarProjects.length, "project")}</p>
+              <p>{formatFilteredCountLabel(sidebarProjects.length, activeProjects.length, "project")}</p>
             </div>
             <div className="sidebar-section-header-actions">
               {isLibraryLoading ? <span className="sidebar-pill">Loading</span> : null}
@@ -2047,101 +2183,15 @@ export default function App() {
 
           {!isProjectsCollapsed && sidebarProjects.length ? (
             <div className="sidebar-project-list">
-              {sidebarProjects.map((project) => (
-                <article className="sidebar-project-group" key={project.id}>
-                  <div className="sidebar-project-card">
-                    <button
-                      className={`sidebar-project-button ${
-                        selectedThread?.projectId === project.id ? "is-active" : ""
-                      }`}
-                      onClick={() => handleProjectToggle(project.id)}
-                      type="button"
-                    >
-                      <div className="sidebar-project-heading">
-                        <div className="sidebar-project-title-row">
-                          <strong>{project.displayName}</strong>
-                          {project.isPinned ? (
-                            <span className="sidebar-pin-badge">Pinned</span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="sidebar-item-meta">
-                        <span>
-                          {formatCountLabel(project.threadCount, "thread")} /{" "}
-                          {formatCountLabel(project.turnCount, "turn")}
-                        </span>
-                        <span>{formatDateTime(project.lastActivityAt)}</span>
-                      </div>
-                    </button>
-                    <div className="sidebar-project-actions">
-                      <button
-                        aria-label={`Manage ${project.displayName}`}
-                        className="sidebar-project-action-button"
-                        onClick={() => handleOpenProjectModal(project.id)}
-                        type="button"
-                      >
-                        ...
-                      </button>
-                    </div>
-                  </div>
+              {sidebarProjects.map((project) => {
+                const visibleProjectThreads = isMetadataFilterActive
+                  ? (matchingProjectThreadsByProjectId[project.id] ?? [])
+                  : (threadsByProjectId[project.id] ?? []);
+                const isProjectExpanded = isMetadataFilterActive
+                  ? visibleProjectThreads.length > 0
+                  : Boolean(expandedProjectIds[project.id]);
 
-                  {expandedProjectIds[project.id] ? (
-                    <div className="sidebar-project-thread-list">
-                      {(threadsByProjectId[project.id] ?? []).map((thread) => (
-                        <button
-                          className={`sidebar-project-thread-button ${
-                            selectedThreadId === thread.id ? "is-active" : ""
-                          }`}
-                          key={thread.id}
-                          onClick={() => handleThreadSelect(thread.id)}
-                          type="button"
-                        >
-                          <span className="sidebar-thread-row">
-                            <span className="sidebar-thread-title">{thread.title}</span>
-                            {thread.isPinned ? (
-                              <span className="sidebar-pin-badge">Pinned</span>
-                            ) : null}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          ) : !isProjectsCollapsed ? (
-            <p className="sidebar-empty-state">
-              No current Codex projects were found.
-            </p>
-          ) : null}
-        </section>
-
-        {historicalProjects.length ? (
-          <section
-            className={`sidebar-section sidebar-historical ${
-              isHistoricalCollapsed ? "is-collapsed" : ""
-            }`}
-          >
-            <div className="sidebar-section-header">
-              <div>
-                <h2>Historical</h2>
-                <p>{formatCountLabel(historicalProjects.length, "project")}</p>
-              </div>
-              <div className="sidebar-section-header-actions">
-                <button
-                  aria-expanded={!isHistoricalCollapsed}
-                  className="sidebar-collapse-toggle"
-                  onClick={() => setIsHistoricalCollapsed((value) => !value)}
-                  type="button"
-                >
-                  {isHistoricalCollapsed ? "Show" : "Hide"}
-                </button>
-              </div>
-            </div>
-
-            {!isHistoricalCollapsed ? (
-              <div className="sidebar-project-list">
-                {historicalProjects.map((project) => (
+                return (
                   <article className="sidebar-project-group" key={project.id}>
                     <div className="sidebar-project-card">
                       <button
@@ -2157,13 +2207,6 @@ export default function App() {
                             {project.isPinned ? (
                               <span className="sidebar-pin-badge">Pinned</span>
                             ) : null}
-                            <span
-                              className={`sidebar-status-badge ${
-                                project.projectStatus === "removed" ? "is-removed" : "is-historical"
-                              }`}
-                            >
-                              {project.projectStatus}
-                            </span>
                           </div>
                         </div>
                         <div className="sidebar-item-meta">
@@ -2186,9 +2229,9 @@ export default function App() {
                       </div>
                     </div>
 
-                    {expandedProjectIds[project.id] ? (
+                    {isProjectExpanded ? (
                       <div className="sidebar-project-thread-list">
-                        {(threadsByProjectId[project.id] ?? []).map((thread) => (
+                        {visibleProjectThreads.map((thread) => (
                           <button
                             className={`sidebar-project-thread-button ${
                               selectedThreadId === thread.id ? "is-active" : ""
@@ -2208,9 +2251,124 @@ export default function App() {
                       </div>
                     ) : null}
                   </article>
-                ))}
+                );
+              })}
+            </div>
+          ) : !isProjectsCollapsed ? (
+            <p className="sidebar-empty-state">
+              {isMetadataFilterActive
+                ? "No projects match the current filters."
+                : "No current Codex projects were found."}
+            </p>
+          ) : null}
+        </section>
+
+        {allHistoricalProjects.length ? (
+          <section
+            className={`sidebar-section sidebar-historical ${
+              isHistoricalCollapsed ? "is-collapsed" : ""
+            }`}
+          >
+            <div className="sidebar-section-header">
+              <div>
+                <h2>Historical</h2>
+                <p>{formatFilteredCountLabel(historicalProjects.length, allHistoricalProjects.length, "project")}</p>
               </div>
-            ) : null}
+              <div className="sidebar-section-header-actions">
+                <button
+                  aria-expanded={!isHistoricalCollapsed}
+                  className="sidebar-collapse-toggle"
+                  onClick={() => setIsHistoricalCollapsed((value) => !value)}
+                  type="button"
+                >
+                  {isHistoricalCollapsed ? "Show" : "Hide"}
+                </button>
+              </div>
+            </div>
+
+            {!isHistoricalCollapsed ? (
+              <div className="sidebar-project-list">
+                {historicalProjects.map((project) => {
+                  const visibleProjectThreads = isMetadataFilterActive
+                    ? (matchingProjectThreadsByProjectId[project.id] ?? [])
+                    : (threadsByProjectId[project.id] ?? []);
+                  const isProjectExpanded = isMetadataFilterActive
+                    ? visibleProjectThreads.length > 0
+                    : Boolean(expandedProjectIds[project.id]);
+
+                  return (
+                    <article className="sidebar-project-group" key={project.id}>
+                      <div className="sidebar-project-card">
+                        <button
+                          className={`sidebar-project-button ${
+                            selectedThread?.projectId === project.id ? "is-active" : ""
+                          }`}
+                          onClick={() => handleProjectToggle(project.id)}
+                          type="button"
+                        >
+                          <div className="sidebar-project-heading">
+                            <div className="sidebar-project-title-row">
+                              <strong>{project.displayName}</strong>
+                              {project.isPinned ? (
+                                <span className="sidebar-pin-badge">Pinned</span>
+                              ) : null}
+                              <span
+                                className={`sidebar-status-badge ${
+                                  project.projectStatus === "removed" ? "is-removed" : "is-historical"
+                                }`}
+                              >
+                                {project.projectStatus}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="sidebar-item-meta">
+                            <span>
+                              {formatCountLabel(project.threadCount, "thread")} /{" "}
+                              {formatCountLabel(project.turnCount, "turn")}
+                            </span>
+                            <span>{formatDateTime(project.lastActivityAt)}</span>
+                          </div>
+                        </button>
+                        <div className="sidebar-project-actions">
+                          <button
+                            aria-label={`Manage ${project.displayName}`}
+                            className="sidebar-project-action-button"
+                            onClick={() => handleOpenProjectModal(project.id)}
+                            type="button"
+                          >
+                            ...
+                          </button>
+                        </div>
+                      </div>
+
+                      {isProjectExpanded ? (
+                        <div className="sidebar-project-thread-list">
+                          {visibleProjectThreads.map((thread) => (
+                            <button
+                              className={`sidebar-project-thread-button ${
+                                selectedThreadId === thread.id ? "is-active" : ""
+                              }`}
+                              key={thread.id}
+                              onClick={() => handleThreadSelect(thread.id)}
+                              type="button"
+                            >
+                              <span className="sidebar-thread-row">
+                                <span className="sidebar-thread-title">{thread.title}</span>
+                                {thread.isPinned ? (
+                                  <span className="sidebar-pin-badge">Pinned</span>
+                                ) : null}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : historicalProjects.length ? null : (
+              <p className="sidebar-empty-state">No historical projects match the current filters.</p>
+            )}
           </section>
         ) : null}
 
@@ -2222,7 +2380,7 @@ export default function App() {
           <div className="sidebar-section-header">
             <div>
               <h2>Chats</h2>
-              <p>{formatCountLabel(chatThreads.length, "chat")}</p>
+              <p>{formatFilteredCountLabel(matchingChatThreads.length, chatThreads.length, "chat")}</p>
             </div>
             <div className="sidebar-section-header-actions">
               <button
@@ -2236,9 +2394,9 @@ export default function App() {
             </div>
           </div>
 
-          {!isChatsCollapsed && chatThreads.length ? (
+          {!isChatsCollapsed && matchingChatThreads.length ? (
             <div className="sidebar-chat-list">
-              {chatThreads.map((thread) => (
+              {matchingChatThreads.map((thread) => (
                 <button
                   key={thread.id}
                   className={`sidebar-chat-button ${
@@ -2260,7 +2418,9 @@ export default function App() {
             </div>
           ) : !isChatsCollapsed ? (
             <p className="sidebar-empty-state">
-              Import Codex sessions to load chats.
+              {isMetadataFilterActive
+                ? "No chats match the current filters."
+                : "Import Codex sessions to load chats."}
             </p>
           ) : null}
         </section>
@@ -2500,18 +2660,18 @@ export default function App() {
             <p className="panel-toolbar-meta muted">
               {selectedThread
                 ? rightPanelMode === "turns"
-                  ? formatCountLabel(turns.length, "turn")
-                  : formatCountLabel(questionTurns.length, "question")
+                  ? formatFilteredCountLabel(visibleTurns.length, turns.length, "turn")
+                  : formatFilteredCountLabel(questionTurns.length, turns.length, "question")
                 : "No thread selected"}
             </p>
           </div>
         </div>
 
         <section className="turn-list-panel">
-          {turns.length ? (
+          {visibleTurns.length ? (
             rightPanelMode === "turns" ? (
               <div className="selection-list">
-                {turns.map((turn) => (
+                {visibleTurns.map((turn) => (
                   <button
                     data-turn-card-id={turn.id}
                     key={turn.id}
@@ -2586,8 +2746,12 @@ export default function App() {
             <p className="empty-state">
               {selectedThread
                 ? rightPanelMode === "turns"
-                  ? "No turns were found for this thread."
-                  : "No questions were found for this thread."
+                  ? isMetadataFilterActive
+                    ? "No turns match the current filters."
+                    : "No turns were found for this thread."
+                  : isMetadataFilterActive
+                    ? "No questions match the current filters."
+                    : "No questions were found for this thread."
                 : "Choose a thread from the sidebar to load turn cards."}
             </p>
           )}
