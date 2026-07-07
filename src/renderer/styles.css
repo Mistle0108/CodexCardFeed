@@ -561,12 +561,14 @@ select {
 }
 
 .search-highlight {
-  display: inline-block;
-  padding: 0 2px;
+  display: inline;
+  padding: 1px 3px;
   border-radius: 4px;
   background: rgba(245, 158, 11, 0.22);
   color: inherit;
   font-weight: 800;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .sidebar-project-heading {
@@ -1124,6 +1126,12 @@ select {
 .question-card-match > span:last-child {
   display: block;
   overflow: visible;
+  word-break: break-word;
+}
+
+.question-card-match > span:last-child > span,
+.turn-search-row > span:last-child > span {
+  display: inline;
 }
 
 .turn-search-tag-list {
