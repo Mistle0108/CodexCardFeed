@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   exportBackupBundle() {
     return ipcRenderer.invoke("app:export-backup-bundle");
   },
+  openBackupBundle() {
+    return ipcRenderer.invoke("app:open-backup-bundle");
+  },
   saveProjectOverride(projectId, changes) {
     return ipcRenderer.invoke("app:save-project-override", projectId, changes);
   },

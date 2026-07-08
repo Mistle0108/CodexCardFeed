@@ -5,6 +5,7 @@ function registerIpcHandlers({
   importSessions,
   openCodexThread,
   exportBackupBundle,
+  openBackupBundle,
   saveProjectOverride,
   saveThreadOverride,
   saveTurnOverride,
@@ -33,6 +34,10 @@ function registerIpcHandlers({
 
   ipcMain.handle("app:export-backup-bundle", () => {
     return exportBackupBundle();
+  });
+
+  ipcMain.handle("app:open-backup-bundle", () => {
+    return openBackupBundle();
   });
 
   ipcMain.handle("app:save-thread-override", (_event, threadId, changes) => {

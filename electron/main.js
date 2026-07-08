@@ -183,6 +183,36 @@ async function exportBackupBundle() {
   });
 }
 
+async function openBackupBundle() {
+  const selection = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose a CodexCardFeed backup folder",
+    buttonLabel: "Open backup",
+    properties: ["openDirectory"]
+  });
+
+  if (selection.canceled || !selection.filePaths.length) {
+    return {
+      canceled: true,
+      shellInfo: null,
+      backupDirectory: null,
+      databaseBackupPath: null,
+      settingsBackupPath: null,
+      manifestPath: null,
+      exportedAt: null,
+      suggestedCodexHome: null
+    };
+  }
+
+  const resolvedBackup = resolveBackupBundle(selection.filePaths[0]);
+  const nextShellInfo = reopenDatabaseAtPath(resolvedBackup.databaseBackupPath);
+
+  return {
+    canceled: false,
+    shellInfo: nextShellInfo,
+    ...resolvedBackup
+  };
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -227,6 +257,9 @@ app.whenReady().then(() => {
     },
     exportBackupBundle() {
       return exportBackupBundle();
+    },
+    openBackupBundle() {
+      return openBackupBundle();
     },
     openCodexThread(threadId) {
       return openCodexThread(threadId);
