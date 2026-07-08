@@ -25,6 +25,19 @@ function formatCountLabel(count: number, singular: string, plural = `${singular}
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function formatFilteredCountLabel(
+  visibleCount: number,
+  totalCount: number,
+  singular: string,
+  plural = `${singular}s`
+) {
+  if (visibleCount === totalCount) {
+    return formatCountLabel(visibleCount, singular, plural);
+  }
+
+  return `${visibleCount} / ${totalCount} ${totalCount === 1 ? singular : plural}`;
+}
+
 function formatInteger(value: number) {
   return integerFormatter.format(value);
 }
@@ -139,6 +152,18 @@ type ItemPresentation = {
   textContent: string | null;
 };
 
+type MetadataFilterState = {
+  searchTerms: string[];
+  pinnedOnly: boolean;
+  memoOnly: boolean;
+};
+
+type MetadataFilterable = {
+  tags: string[];
+  notes: string;
+  isPinned: boolean;
+};
+
 function resolveSelectedId<T extends { id: string }>(
   rows: T[],
   preferredId: string | null
@@ -197,6 +222,182 @@ function getTurnHeading(turn: TurnListItem) {
   return turn.displayTitle
     ? `Turn ${turn.ordinal} / ${turn.displayTitle}`
     : `Turn ${turn.ordinal}`;
+}
+
+function normalizeSearchTerms(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeSearchSourceText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hasActiveMetadataFilters(filters: MetadataFilterState) {
+  return Boolean(filters.searchTerms.length || filters.pinnedOnly || filters.memoOnly);
+}
+
+function containsAnySearchTerm(text: string, searchTerms: string[]) {
+  const normalized = normalizeSearchSourceText(text).toLowerCase();
+
+  if (!normalized || !searchTerms.length) {
+    return false;
+  }
+
+  return searchTerms.some((term) => normalized.includes(term));
+}
+
+function matchesSearchTerms(values: string[], searchTerms: string[]) {
+  if (!searchTerms.length) {
+    return true;
+  }
+
+  const haystack = values
+    .map((value) => normalizeSearchSourceText(value).toLowerCase())
+    .filter(Boolean)
+    .join("\n\n");
+
+  if (!haystack) {
+    return false;
+  }
+
+  return searchTerms.every((term) => haystack.includes(term));
+}
+
+function getHighlightedSegments(text: string, searchTerms: string[]) {
+  if (!text || !searchTerms.length) {
+    return [{ text, isMatch: false }];
+  }
+
+  const uniqueTerms = [...new Set(searchTerms)].sort((left, right) => right.length - left.length);
+
+  if (!uniqueTerms.length) {
+    return [{ text, isMatch: false }];
+  }
+
+  const pattern = new RegExp(uniqueTerms.map((term) => escapeRegExp(term)).join("|"), "gi");
+  const segments: Array<{ text: string; isMatch: boolean }> = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const matchText = match[0] ?? "";
+    const matchIndex = match.index ?? 0;
+
+    if (matchIndex > lastIndex) {
+      segments.push({
+        text: text.slice(lastIndex, matchIndex),
+        isMatch: false
+      });
+    }
+
+    segments.push({
+      text: matchText,
+      isMatch: true
+    });
+
+    lastIndex = matchIndex + matchText.length;
+  }
+
+  if (lastIndex < text.length) {
+    segments.push({
+      text: text.slice(lastIndex),
+      isMatch: false
+    });
+  }
+
+  return segments.length ? segments : [{ text, isMatch: false }];
+}
+
+function getMatchingExcerpt(text: string, searchTerms: string[], maxLength = 140) {
+  const normalized = normalizeSearchSourceText(text);
+
+  if (!normalized || !searchTerms.length) {
+    return null;
+  }
+
+  const lowerText = normalized.toLowerCase();
+  let firstMatchIndex = -1;
+
+  for (const term of searchTerms) {
+    const nextIndex = lowerText.indexOf(term);
+
+    if (nextIndex !== -1 && (firstMatchIndex === -1 || nextIndex < firstMatchIndex)) {
+      firstMatchIndex = nextIndex;
+    }
+  }
+
+  if (firstMatchIndex === -1) {
+    return null;
+  }
+
+  const start = Math.max(0, firstMatchIndex - Math.floor((maxLength - 1) / 2));
+  const end = Math.min(normalized.length, start + maxLength);
+  const excerpt = normalized.slice(start, end).trim();
+
+  return `${start > 0 ? "..." : ""}${excerpt}${end < normalized.length ? "..." : ""}`;
+}
+
+function renderHighlightedText(text: string, searchTerms: string[]) {
+  return getHighlightedSegments(text, searchTerms).map((segment, index) =>
+    segment.isMatch ? (
+      <mark className="search-highlight" key={`${segment.text}-${index}`}>
+        {segment.text}
+      </mark>
+    ) : (
+      <span key={`${segment.text}-${index}`}>{segment.text}</span>
+    )
+  );
+}
+
+function matchesMetadataFilters(
+  item: MetadataFilterable,
+  filters: MetadataFilterState,
+  searchValues: string[]
+) {
+  if (filters.pinnedOnly && !item.isPinned) {
+    return false;
+  }
+
+  if (filters.memoOnly && !item.notes.trim()) {
+    return false;
+  }
+
+  if (filters.searchTerms.length) {
+    return matchesSearchTerms(searchValues, filters.searchTerms);
+  }
+
+  return true;
+}
+
+function groupThreadsByProjectId(rows: ThreadListItem[]) {
+  return rows.reduce<Record<string, ThreadListItem[]>>((groups, thread) => {
+    if (!groups[thread.projectId]) {
+      groups[thread.projectId] = [];
+    }
+
+    groups[thread.projectId].push(thread);
+    return groups;
+  }, {});
+}
+
+function matchesTurnThreadSearch(turn: TurnListItem, searchTerms: string[]) {
+  return matchesSearchTerms(
+    [
+      turn.displayTitle ?? "",
+      turn.searchUserText,
+      turn.searchFinalAnswerText,
+      ...turn.tags,
+      turn.notes
+    ],
+    searchTerms
+  );
 }
 
 function resolveProjectDisplayNameOverride(draftValue: string, sourceDisplayName: string) {
@@ -693,7 +894,7 @@ export default function App() {
   );
   const [isThreadTitleEditing, setIsThreadTitleEditing] = useState(false);
   const [threadTitleDraft, setThreadTitleDraft] = useState("");
-  const [isThreadMetadataCollapsed, setIsThreadMetadataCollapsed] = useState(false);
+  const [isThreadMetadataCollapsed, setIsThreadMetadataCollapsed] = useState(true);
   const [threadTagInputDraft, setThreadTagInputDraft] = useState("");
   const [threadTagsDraft, setThreadTagsDraft] = useState<string[]>([]);
   const [threadNotesDraft, setThreadNotesDraft] = useState("");
@@ -721,6 +922,10 @@ export default function App() {
   const [isChatsCollapsed, setIsChatsCollapsed] = useState(() =>
     readStoredCollapsedState(CHATS_COLLAPSED_STORAGE_KEY)
   );
+  const [metadataTagFilter, setMetadataTagFilter] = useState("");
+  const [isPinnedFilterActive, setIsPinnedFilterActive] = useState(false);
+  const [isMemoFilterActive, setIsMemoFilterActive] = useState(false);
+  const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [rightPanelMode, setRightPanelMode] = useState<"turns" | "questions">("turns");
   const [expandedProjectIds, setExpandedProjectIds] = useState(() =>
     readStoredExpandedProjectIds()
@@ -731,7 +936,19 @@ export default function App() {
   const selectedThread =
     threads.find((thread) => thread.id === selectedThreadId) ?? null;
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
-  const questionTurns = turns;
+  const normalizedSidebarSearchTerms = normalizeSearchTerms(metadataTagFilter);
+  const normalizedThreadSearchTerms = normalizeSearchTerms(threadSearchQuery);
+  const metadataFilters: MetadataFilterState = {
+    searchTerms: normalizedSidebarSearchTerms,
+    pinnedOnly: isPinnedFilterActive,
+    memoOnly: isMemoFilterActive
+  };
+  const isMetadataFilterActive = hasActiveMetadataFilters(metadataFilters);
+  const isThreadSearchActive = normalizedThreadSearchTerms.length > 0;
+  const visibleTurns = isThreadSearchActive
+    ? turns.filter((turn) => matchesTurnThreadSearch(turn, normalizedThreadSearchTerms))
+    : turns;
+  const questionTurns = visibleTurns;
   const primaryTurnItems = turnItems.filter((item) => isPrimaryDetailItem(item));
   const additionalTurnItems = turnItems.filter((item) => !isPrimaryDetailItem(item));
   const integrityFailedChecks =
@@ -746,8 +963,33 @@ export default function App() {
         ...sessionDiagnosisReport.parseProblems
       ]
     : [];
-  const sidebarProjects = projects.filter((project) => project.projectStatus === "active");
-  const historicalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
+  const activeProjects = projects.filter((project) => project.projectStatus === "active");
+  const allProjectIds = new Set(projects.map((project) => project.id));
+  const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
+  const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const matchingProjectThreads = isMetadataFilterActive
+    ? projectThreads.filter((thread) =>
+        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+      )
+    : projectThreads;
+  const matchingChatThreads = isMetadataFilterActive
+    ? chatThreads.filter((thread) =>
+        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+      )
+    : chatThreads;
+  const matchingProjectThreadsByProjectId = groupThreadsByProjectId(matchingProjectThreads);
+  const threadsByProjectId = groupThreadsByProjectId(projectThreads);
+  const sidebarProjects = activeProjects.filter((project) => {
+    if (!isMetadataFilterActive) {
+      return true;
+    }
+
+    return (
+      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
+      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
+    );
+  });
+  const allHistoricalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
     .sort((left, right) => {
       if (left.projectStatus === right.projectStatus) {
         return 0;
@@ -763,9 +1005,16 @@ export default function App() {
 
       return 0;
     });
-  const allProjectIds = new Set(projects.map((project) => project.id));
-  const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
-  const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
+  const historicalProjects = allHistoricalProjects.filter((project) => {
+    if (!isMetadataFilterActive) {
+      return true;
+    }
+
+    return (
+      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
+      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
+    );
+  });
   const normalizedProjectNotesDraft = normalizeNoteDraft(projectNotesDraft);
   const normalizedThreadNotesDraft = normalizeNoteDraft(threadNotesDraft);
   const normalizedTurnNotesDraft = normalizeNoteDraft(turnNotesDraft);
@@ -816,17 +1065,6 @@ export default function App() {
     selectedTurn && normalizedTurnNotesDraft !== selectedTurn.notes
   );
   const canClearTurnMemo = Boolean(selectedTurn?.notes);
-  const threadsByProjectId = projectThreads.reduce<Record<string, ThreadListItem[]>>(
-    (groups, thread) => {
-      if (!groups[thread.projectId]) {
-        groups[thread.projectId] = [];
-      }
-
-      groups[thread.projectId].push(thread);
-      return groups;
-    },
-    {}
-  );
 
   function revealThreadSelection(threadId: string) {
     const nextThread = threads.find((thread) => thread.id === threadId) ?? null;
@@ -1022,6 +1260,14 @@ export default function App() {
   }, [selectedThread?.id, selectedThread?.title, selectedThread?.notes, selectedThread?.tags]);
 
   useEffect(() => {
+    setIsThreadMetadataCollapsed(true);
+  }, [selectedThread?.id]);
+
+  useEffect(() => {
+    setThreadSearchQuery("");
+  }, [selectedThreadId]);
+
+  useEffect(() => {
     setIsTurnTitleEditing(false);
     setTurnTitleDraft(selectedTurn?.displayTitle ?? "");
     setTurnTagInputDraft("");
@@ -1079,6 +1325,12 @@ export default function App() {
 
   function handleOpenProjectModal(projectId: string) {
     setProjectModalProjectId(projectId);
+  }
+
+  function handleResetMetadataFilters() {
+    setMetadataTagFilter("");
+    setIsPinnedFilterActive(false);
+    setIsMemoFilterActive(false);
   }
 
   function handleThreadSelect(threadId: string) {
@@ -1898,6 +2150,35 @@ export default function App() {
     }
   }
 
+  function getMatchingTagValues(tags: string[], searchTerms: string[]) {
+    if (!searchTerms.length) {
+      return [];
+    }
+
+    return tags.filter((tag) => containsAnySearchTerm(tag, searchTerms));
+  }
+
+  function getMatchingMemoExcerpt(notes: string, searchTerms: string[], maxLength = 120) {
+    if (!searchTerms.length || !containsAnySearchTerm(notes, searchTerms)) {
+      return null;
+    }
+
+    return getMatchingExcerpt(notes, searchTerms, maxLength) ?? normalizeSearchSourceText(notes);
+  }
+
+  function getAdditionalSearchExcerpt(
+    fullText: string,
+    visibleText: string,
+    searchTerms: string[],
+    maxLength = 120
+  ) {
+    if (!searchTerms.length || containsAnySearchTerm(visibleText, searchTerms)) {
+      return null;
+    }
+
+    return getMatchingExcerpt(fullText, searchTerms, maxLength);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar-shell">
@@ -2021,6 +2302,46 @@ export default function App() {
         </button>
 
         <div className="sidebar-scroll-area">
+        <section className="path-panel sidebar-filter-panel">
+          <section className="path-panel-item">
+            <div className="path-panel-item-header">
+              <strong>Filters</strong>
+              {isMetadataFilterActive ? (
+                <button
+                  className="sidebar-collapse-toggle"
+                  onClick={handleResetMetadataFilters}
+                  type="button"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            <p className="sidebar-filter-copy">Applies to projects, chats, and thread lists.</p>
+            <input
+              className="path-panel-input sidebar-filter-input"
+              onChange={(event) => setMetadataTagFilter(event.target.value)}
+              placeholder="Search projects, threads, tags"
+              type="text"
+              value={metadataTagFilter}
+            />
+            <div className="sidebar-filter-actions">
+              <button
+                className={`sidebar-filter-chip ${isPinnedFilterActive ? "is-active" : ""}`}
+                onClick={() => setIsPinnedFilterActive((value) => !value)}
+                type="button"
+              >
+                Pinned
+              </button>
+              <button
+                className={`sidebar-filter-chip ${isMemoFilterActive ? "is-active" : ""}`}
+                onClick={() => setIsMemoFilterActive((value) => !value)}
+                type="button"
+              >
+                Has memo
+              </button>
+            </div>
+          </section>
+        </section>
 
         <section
           className={`sidebar-section sidebar-projects ${
@@ -2030,7 +2351,7 @@ export default function App() {
           <div className="sidebar-section-header">
             <div>
               <h2>Projects</h2>
-              <p>{formatCountLabel(sidebarProjects.length, "project")}</p>
+              <p>{formatFilteredCountLabel(sidebarProjects.length, activeProjects.length, "project")}</p>
             </div>
             <div className="sidebar-section-header-actions">
               {isLibraryLoading ? <span className="sidebar-pill">Loading</span> : null}
@@ -2047,101 +2368,19 @@ export default function App() {
 
           {!isProjectsCollapsed && sidebarProjects.length ? (
             <div className="sidebar-project-list">
-              {sidebarProjects.map((project) => (
-                <article className="sidebar-project-group" key={project.id}>
-                  <div className="sidebar-project-card">
-                    <button
-                      className={`sidebar-project-button ${
-                        selectedThread?.projectId === project.id ? "is-active" : ""
-                      }`}
-                      onClick={() => handleProjectToggle(project.id)}
-                      type="button"
-                    >
-                      <div className="sidebar-project-heading">
-                        <div className="sidebar-project-title-row">
-                          <strong>{project.displayName}</strong>
-                          {project.isPinned ? (
-                            <span className="sidebar-pin-badge">Pinned</span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="sidebar-item-meta">
-                        <span>
-                          {formatCountLabel(project.threadCount, "thread")} /{" "}
-                          {formatCountLabel(project.turnCount, "turn")}
-                        </span>
-                        <span>{formatDateTime(project.lastActivityAt)}</span>
-                      </div>
-                    </button>
-                    <div className="sidebar-project-actions">
-                      <button
-                        aria-label={`Manage ${project.displayName}`}
-                        className="sidebar-project-action-button"
-                        onClick={() => handleOpenProjectModal(project.id)}
-                        type="button"
-                      >
-                        ...
-                      </button>
-                    </div>
-                  </div>
+              {sidebarProjects.map((project) => {
+                const visibleProjectThreads = isMetadataFilterActive
+                  ? (matchingProjectThreadsByProjectId[project.id] ?? [])
+                  : (threadsByProjectId[project.id] ?? []);
+                const isProjectExpanded = isMetadataFilterActive
+                  ? visibleProjectThreads.length > 0
+                  : Boolean(expandedProjectIds[project.id]);
+                const matchingProjectTags = getMatchingTagValues(
+                  project.tags,
+                  normalizedSidebarSearchTerms
+                );
 
-                  {expandedProjectIds[project.id] ? (
-                    <div className="sidebar-project-thread-list">
-                      {(threadsByProjectId[project.id] ?? []).map((thread) => (
-                        <button
-                          className={`sidebar-project-thread-button ${
-                            selectedThreadId === thread.id ? "is-active" : ""
-                          }`}
-                          key={thread.id}
-                          onClick={() => handleThreadSelect(thread.id)}
-                          type="button"
-                        >
-                          <span className="sidebar-thread-row">
-                            <span className="sidebar-thread-title">{thread.title}</span>
-                            {thread.isPinned ? (
-                              <span className="sidebar-pin-badge">Pinned</span>
-                            ) : null}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          ) : !isProjectsCollapsed ? (
-            <p className="sidebar-empty-state">
-              No current Codex projects were found.
-            </p>
-          ) : null}
-        </section>
-
-        {historicalProjects.length ? (
-          <section
-            className={`sidebar-section sidebar-historical ${
-              isHistoricalCollapsed ? "is-collapsed" : ""
-            }`}
-          >
-            <div className="sidebar-section-header">
-              <div>
-                <h2>Historical</h2>
-                <p>{formatCountLabel(historicalProjects.length, "project")}</p>
-              </div>
-              <div className="sidebar-section-header-actions">
-                <button
-                  aria-expanded={!isHistoricalCollapsed}
-                  className="sidebar-collapse-toggle"
-                  onClick={() => setIsHistoricalCollapsed((value) => !value)}
-                  type="button"
-                >
-                  {isHistoricalCollapsed ? "Show" : "Hide"}
-                </button>
-              </div>
-            </div>
-
-            {!isHistoricalCollapsed ? (
-              <div className="sidebar-project-list">
-                {historicalProjects.map((project) => (
+                return (
                   <article className="sidebar-project-group" key={project.id}>
                     <div className="sidebar-project-card">
                       <button
@@ -2153,19 +2392,21 @@ export default function App() {
                       >
                         <div className="sidebar-project-heading">
                           <div className="sidebar-project-title-row">
-                            <strong>{project.displayName}</strong>
+                            <strong>{renderHighlightedText(project.displayName, normalizedSidebarSearchTerms)}</strong>
                             {project.isPinned ? (
                               <span className="sidebar-pin-badge">Pinned</span>
                             ) : null}
-                            <span
-                              className={`sidebar-status-badge ${
-                                project.projectStatus === "removed" ? "is-removed" : "is-historical"
-                              }`}
-                            >
-                              {project.projectStatus}
-                            </span>
                           </div>
                         </div>
+                        {matchingProjectTags.length ? (
+                          <div className="sidebar-search-tag-list">
+                            {matchingProjectTags.map((tag) => (
+                              <span className="sidebar-search-tag" key={tag}>
+                                {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <div className="sidebar-item-meta">
                           <span>
                             {formatCountLabel(project.threadCount, "thread")} /{" "}
@@ -2186,31 +2427,195 @@ export default function App() {
                       </div>
                     </div>
 
-                    {expandedProjectIds[project.id] ? (
+                    {isProjectExpanded ? (
                       <div className="sidebar-project-thread-list">
-                        {(threadsByProjectId[project.id] ?? []).map((thread) => (
-                          <button
-                            className={`sidebar-project-thread-button ${
-                              selectedThreadId === thread.id ? "is-active" : ""
-                            }`}
-                            key={thread.id}
-                            onClick={() => handleThreadSelect(thread.id)}
-                            type="button"
-                          >
-                            <span className="sidebar-thread-row">
-                              <span className="sidebar-thread-title">{thread.title}</span>
-                              {thread.isPinned ? (
-                                <span className="sidebar-pin-badge">Pinned</span>
+                        {visibleProjectThreads.map((thread) => {
+                          const matchingThreadTags = getMatchingTagValues(
+                            thread.tags,
+                            normalizedSidebarSearchTerms
+                          );
+
+                          return (
+                            <button
+                              className={`sidebar-project-thread-button ${
+                                selectedThreadId === thread.id ? "is-active" : ""
+                              }`}
+                              key={thread.id}
+                              onClick={() => handleThreadSelect(thread.id)}
+                              type="button"
+                            >
+                              <span className="sidebar-thread-row">
+                                <span className="sidebar-thread-title">
+                                  {renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}
+                                </span>
+                                {thread.isPinned ? (
+                                  <span className="sidebar-pin-badge">Pinned</span>
+                                ) : null}
+                              </span>
+                              {matchingThreadTags.length ? (
+                                <span className="sidebar-thread-search-tags">
+                                  {matchingThreadTags.map((tag) => (
+                                    <span className="sidebar-search-tag" key={tag}>
+                                      {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                    </span>
+                                  ))}
+                                </span>
                               ) : null}
-                            </span>
-                          </button>
-                        ))}
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </article>
-                ))}
+                );
+              })}
+            </div>
+          ) : !isProjectsCollapsed ? (
+            <p className="sidebar-empty-state">
+              {isMetadataFilterActive
+                ? "No projects match the current filters."
+                : "No current Codex projects were found."}
+            </p>
+          ) : null}
+        </section>
+
+        {allHistoricalProjects.length ? (
+          <section
+            className={`sidebar-section sidebar-historical ${
+              isHistoricalCollapsed ? "is-collapsed" : ""
+            }`}
+          >
+            <div className="sidebar-section-header">
+              <div>
+                <h2>Historical</h2>
+                <p>{formatFilteredCountLabel(historicalProjects.length, allHistoricalProjects.length, "project")}</p>
               </div>
-            ) : null}
+              <div className="sidebar-section-header-actions">
+                <button
+                  aria-expanded={!isHistoricalCollapsed}
+                  className="sidebar-collapse-toggle"
+                  onClick={() => setIsHistoricalCollapsed((value) => !value)}
+                  type="button"
+                >
+                  {isHistoricalCollapsed ? "Show" : "Hide"}
+                </button>
+              </div>
+            </div>
+
+            {!isHistoricalCollapsed ? (
+              <div className="sidebar-project-list">
+                {historicalProjects.map((project) => {
+                  const visibleProjectThreads = isMetadataFilterActive
+                    ? (matchingProjectThreadsByProjectId[project.id] ?? [])
+                    : (threadsByProjectId[project.id] ?? []);
+                  const isProjectExpanded = isMetadataFilterActive
+                    ? visibleProjectThreads.length > 0
+                    : Boolean(expandedProjectIds[project.id]);
+                  const matchingProjectTags = getMatchingTagValues(
+                    project.tags,
+                    normalizedSidebarSearchTerms
+                  );
+
+                  return (
+                    <article className="sidebar-project-group" key={project.id}>
+                      <div className="sidebar-project-card">
+                        <button
+                          className={`sidebar-project-button ${
+                            selectedThread?.projectId === project.id ? "is-active" : ""
+                          }`}
+                          onClick={() => handleProjectToggle(project.id)}
+                          type="button"
+                        >
+                          <div className="sidebar-project-heading">
+                            <div className="sidebar-project-title-row">
+                              <strong>{renderHighlightedText(project.displayName, normalizedSidebarSearchTerms)}</strong>
+                              {project.isPinned ? (
+                                <span className="sidebar-pin-badge">Pinned</span>
+                              ) : null}
+                              <span
+                                className={`sidebar-status-badge ${
+                                  project.projectStatus === "removed" ? "is-removed" : "is-historical"
+                                }`}
+                              >
+                                {project.projectStatus}
+                              </span>
+                            </div>
+                          </div>
+                          {matchingProjectTags.length ? (
+                            <div className="sidebar-search-tag-list">
+                              {matchingProjectTags.map((tag) => (
+                                <span className="sidebar-search-tag" key={tag}>
+                                  {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="sidebar-item-meta">
+                            <span>
+                              {formatCountLabel(project.threadCount, "thread")} /{" "}
+                              {formatCountLabel(project.turnCount, "turn")}
+                            </span>
+                            <span>{formatDateTime(project.lastActivityAt)}</span>
+                          </div>
+                        </button>
+                        <div className="sidebar-project-actions">
+                          <button
+                            aria-label={`Manage ${project.displayName}`}
+                            className="sidebar-project-action-button"
+                            onClick={() => handleOpenProjectModal(project.id)}
+                            type="button"
+                          >
+                            ...
+                          </button>
+                        </div>
+                      </div>
+
+                      {isProjectExpanded ? (
+                        <div className="sidebar-project-thread-list">
+                          {visibleProjectThreads.map((thread) => {
+                            const matchingThreadTags = getMatchingTagValues(
+                              thread.tags,
+                              normalizedSidebarSearchTerms
+                            );
+
+                            return (
+                              <button
+                                className={`sidebar-project-thread-button ${
+                                  selectedThreadId === thread.id ? "is-active" : ""
+                                }`}
+                                key={thread.id}
+                                onClick={() => handleThreadSelect(thread.id)}
+                                type="button"
+                              >
+                                <span className="sidebar-thread-row">
+                                  <span className="sidebar-thread-title">
+                                    {renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}
+                                  </span>
+                                  {thread.isPinned ? (
+                                    <span className="sidebar-pin-badge">Pinned</span>
+                                  ) : null}
+                                </span>
+                                {matchingThreadTags.length ? (
+                                  <span className="sidebar-thread-search-tags">
+                                    {matchingThreadTags.map((tag) => (
+                                      <span className="sidebar-search-tag" key={tag}>
+                                        {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                                      </span>
+                                    ))}
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : historicalProjects.length ? null : (
+              <p className="sidebar-empty-state">No historical projects match the current filters.</p>
+            )}
           </section>
         ) : null}
 
@@ -2222,7 +2627,7 @@ export default function App() {
           <div className="sidebar-section-header">
             <div>
               <h2>Chats</h2>
-              <p>{formatCountLabel(chatThreads.length, "chat")}</p>
+              <p>{formatFilteredCountLabel(matchingChatThreads.length, chatThreads.length, "chat")}</p>
             </div>
             <div className="sidebar-section-header-actions">
               <button
@@ -2236,31 +2641,49 @@ export default function App() {
             </div>
           </div>
 
-          {!isChatsCollapsed && chatThreads.length ? (
+          {!isChatsCollapsed && matchingChatThreads.length ? (
             <div className="sidebar-chat-list">
-              {chatThreads.map((thread) => (
-                <button
-                  key={thread.id}
-                  className={`sidebar-chat-button ${
-                    selectedThreadId === thread.id ? "is-active" : ""
-                  }`}
-                  onClick={() => handleThreadSelect(thread.id)}
-                  type="button"
-                >
-                  <div className="sidebar-chat-heading">
-                    <strong>{thread.title}</strong>
-                    {thread.isPinned ? <span className="sidebar-pin-badge">Pinned</span> : null}
-                  </div>
-                  <div className="sidebar-item-meta">
-                    <span>{formatCountLabel(thread.turnCount, "turn")}</span>
-                    <span>{formatDateTime(thread.updatedAt ?? thread.lastSeenAt)}</span>
-                  </div>
-                </button>
-              ))}
+              {matchingChatThreads.map((thread) => {
+                const matchingThreadTags = getMatchingTagValues(
+                  thread.tags,
+                  normalizedSidebarSearchTerms
+                );
+
+                return (
+                  <button
+                    key={thread.id}
+                    className={`sidebar-chat-button ${
+                      selectedThreadId === thread.id ? "is-active" : ""
+                    }`}
+                    onClick={() => handleThreadSelect(thread.id)}
+                    type="button"
+                  >
+                    <div className="sidebar-chat-heading">
+                      <strong>{renderHighlightedText(thread.title, normalizedSidebarSearchTerms)}</strong>
+                      {thread.isPinned ? <span className="sidebar-pin-badge">Pinned</span> : null}
+                    </div>
+                    {matchingThreadTags.length ? (
+                      <div className="sidebar-search-tag-list">
+                        {matchingThreadTags.map((tag) => (
+                          <span className="sidebar-search-tag" key={tag}>
+                            {renderHighlightedText(tag, normalizedSidebarSearchTerms)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="sidebar-item-meta">
+                      <span>{formatCountLabel(thread.turnCount, "turn")}</span>
+                      <span>{formatDateTime(thread.updatedAt ?? thread.lastSeenAt)}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           ) : !isChatsCollapsed ? (
             <p className="sidebar-empty-state">
-              Import Codex sessions to load chats.
+              {isMetadataFilterActive
+                ? "No chats match the current filters."
+                : "Import Codex sessions to load chats."}
             </p>
           ) : null}
         </section>
@@ -2500,94 +2923,226 @@ export default function App() {
             <p className="panel-toolbar-meta muted">
               {selectedThread
                 ? rightPanelMode === "turns"
-                  ? formatCountLabel(turns.length, "turn")
-                  : formatCountLabel(questionTurns.length, "question")
+                  ? formatFilteredCountLabel(visibleTurns.length, turns.length, "turn")
+                  : formatFilteredCountLabel(questionTurns.length, turns.length, "question")
                 : "No thread selected"}
             </p>
+          </div>
+          <div className="panel-search-row">
+            <input
+              className="path-panel-input panel-search-input"
+              disabled={!selectedThread}
+              onChange={(event) => setThreadSearchQuery(event.target.value)}
+              placeholder="Search this thread content, tags, memo"
+              type="text"
+              value={threadSearchQuery}
+            />
+            {isThreadSearchActive ? (
+              <button
+                className="sidebar-collapse-toggle"
+                onClick={() => setThreadSearchQuery("")}
+                type="button"
+              >
+                Clear
+              </button>
+            ) : null}
           </div>
         </div>
 
         <section className="turn-list-panel">
-          {turns.length ? (
+          {visibleTurns.length ? (
             rightPanelMode === "turns" ? (
               <div className="selection-list">
-                {turns.map((turn) => (
-                  <button
-                    data-turn-card-id={turn.id}
-                    key={turn.id}
-                    className={`selection-button ${
-                      selectedTurnId === turn.id ? "is-active" : ""
-                    }`}
-                    onClick={() => handleOpenTurnDetail(turn.id)}
-                    type="button"
-                  >
-                    <div className="selection-copy">
-                      <div className="selection-topline">
-                        <strong>{getTurnHeading(turn)}</strong>
-                        <div className="selection-pills">
-                          {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
-                          <span
-                            className={`status-pill ${
-                              turn.status === "completed" ? "is-complete" : "is-open"
-                            }`}
-                          >
-                            {turn.status}
+                {visibleTurns.map((turn) => {
+                  const turnHeading = getTurnHeading(turn);
+                  const questionPreview = getQuestionPreview(turn);
+                  const answerPreview = getAnswerPreview(turn);
+                  const matchingTurnTags = getMatchingTagValues(
+                    turn.tags,
+                    normalizedThreadSearchTerms
+                  );
+                  const matchingMemoExcerpt = getMatchingMemoExcerpt(
+                    turn.notes,
+                    normalizedThreadSearchTerms
+                  );
+                  const questionMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchUserText,
+                    questionPreview,
+                    normalizedThreadSearchTerms
+                  );
+                  const answerMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchFinalAnswerText,
+                    answerPreview,
+                    normalizedThreadSearchTerms
+                  );
+
+                  return (
+                    <button
+                      data-turn-card-id={turn.id}
+                      key={turn.id}
+                      className={`selection-button ${
+                        selectedTurnId === turn.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleOpenTurnDetail(turn.id)}
+                      type="button"
+                    >
+                      <div className="selection-copy">
+                        <div className="selection-topline">
+                          <strong>{renderHighlightedText(turnHeading, normalizedThreadSearchTerms)}</strong>
+                          <div className="selection-pills">
+                            {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                            <span
+                              className={`status-pill ${
+                                turn.status === "completed" ? "is-complete" : "is-open"
+                              }`}
+                            >
+                              {turn.status}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="turn-preview">
+                          <span className="preview-label">Q</span>
+                          <span>{renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}</span>
+                        </p>
+                        {questionMatchExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Q+</span>
+                            <span>{renderHighlightedText(questionMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                        <p className="turn-preview">
+                          <span className="preview-label">A</span>
+                          <span>{renderHighlightedText(answerPreview, normalizedThreadSearchTerms)}</span>
+                        </p>
+                        {answerMatchExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">A+</span>
+                            <span>{renderHighlightedText(answerMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                        {matchingTurnTags.length ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Tag</span>
+                            <span className="turn-search-tag-list">
+                              {matchingTurnTags.map((tag) => (
+                                <span className="turn-search-tag" key={tag}>
+                                  {renderHighlightedText(tag, normalizedThreadSearchTerms)}
+                                </span>
+                              ))}
+                            </span>
+                          </p>
+                        ) : null}
+                        {matchingMemoExcerpt ? (
+                          <p className="turn-preview turn-search-row">
+                            <span className="preview-label">Memo</span>
+                            <span>{renderHighlightedText(matchingMemoExcerpt, normalizedThreadSearchTerms)}</span>
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="turn-card-actions">
+                        <div className="selection-trailing">
+                          <span className="mini-meta">
+                            {formatCountLabel(turn.itemCount, "item")}
+                          </span>
+                          <span className="mini-meta token-meta">
+                            {formatTokenLabel(turn.totalTokens)}
                           </span>
                         </div>
                       </div>
-                      <p className="turn-preview">
-                        <span className="preview-label">Q</span>
-                        <span>{getQuestionPreview(turn)}</span>
-                      </p>
-                      <p className="turn-preview">
-                        <span className="preview-label">A</span>
-                        <span>{getAnswerPreview(turn)}</span>
-                      </p>
-                    </div>
-                    <div className="turn-card-actions">
-                      <div className="selection-trailing">
-                        <span className="mini-meta">
-                          {formatCountLabel(turn.itemCount, "item")}
-                        </span>
-                        <span className="mini-meta token-meta">
-                          {formatTokenLabel(turn.totalTokens)}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <div className="question-list">
-                {questionTurns.map((turn) => (
-                  <button
-                    key={turn.id}
-                    className={`selection-button question-card ${
-                      selectedTurnId === turn.id ? "is-active" : ""
-                    }`}
-                    onClick={() => handleOpenTurnDetail(turn.id)}
-                    type="button"
-                  >
-                    <div className="question-card-header">
-                      <div className="question-card-heading">
-                        <strong>{getTurnHeading(turn)}</strong>
-                        {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                {questionTurns.map((turn) => {
+                  const turnHeading = getTurnHeading(turn);
+                  const questionPreview = getQuestionPreview(turn);
+                  const matchingTurnTags = getMatchingTagValues(
+                    turn.tags,
+                    normalizedThreadSearchTerms
+                  );
+                  const matchingMemoExcerpt = getMatchingMemoExcerpt(
+                    turn.notes,
+                    normalizedThreadSearchTerms
+                  );
+                  const questionMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchUserText,
+                    questionPreview,
+                    normalizedThreadSearchTerms
+                  );
+                  const answerMatchExcerpt = getAdditionalSearchExcerpt(
+                    turn.searchFinalAnswerText,
+                    "",
+                    normalizedThreadSearchTerms
+                  );
+
+                  return (
+                    <button
+                      key={turn.id}
+                      className={`selection-button question-card ${
+                        selectedTurnId === turn.id ? "is-active" : ""
+                      }`}
+                      onClick={() => handleOpenTurnDetail(turn.id)}
+                      type="button"
+                    >
+                      <div className="question-card-header">
+                        <div className="question-card-heading">
+                          <strong>{renderHighlightedText(turnHeading, normalizedThreadSearchTerms)}</strong>
+                          {turn.isPinned ? <span className="pin-pill">Pinned</span> : null}
+                        </div>
+                        <span className="mini-meta">
+                          {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
+                        </span>
                       </div>
-                      <span className="mini-meta">
-                        {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
-                      </span>
-                    </div>
-                    <p className="question-card-question">{getQuestionPreview(turn)}</p>
-                  </button>
-                ))}
+                      <p className="question-card-question">
+                        {renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}
+                      </p>
+                      {questionMatchExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Q+</span>
+                          <span>{renderHighlightedText(questionMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                      {answerMatchExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">A</span>
+                          <span>{renderHighlightedText(answerMatchExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                      {matchingTurnTags.length ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Tag</span>
+                          <span className="turn-search-tag-list">
+                            {matchingTurnTags.map((tag) => (
+                              <span className="turn-search-tag" key={tag}>
+                                {renderHighlightedText(tag, normalizedThreadSearchTerms)}
+                              </span>
+                            ))}
+                          </span>
+                        </p>
+                      ) : null}
+                      {matchingMemoExcerpt ? (
+                        <p className="question-card-match">
+                          <span className="preview-label">Memo</span>
+                          <span>{renderHighlightedText(matchingMemoExcerpt, normalizedThreadSearchTerms)}</span>
+                        </p>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             )
           ) : (
             <p className="empty-state">
               {selectedThread
                 ? rightPanelMode === "turns"
-                  ? "No turns were found for this thread."
-                  : "No questions were found for this thread."
+                  ? isThreadSearchActive
+                    ? "No turns match the current search."
+                    : "No turns were found for this thread."
+                  : isThreadSearchActive
+                    ? "No questions match the current search."
+                    : "No questions were found for this thread."
                 : "Choose a thread from the sidebar to load turn cards."}
             </p>
           )}

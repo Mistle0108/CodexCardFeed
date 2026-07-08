@@ -141,6 +141,8 @@ type TurnListItem = {
   notes: string;
   firstUserSnippet: string;
   firstAssistantSnippet: string;
+  searchUserText: string;
+  searchFinalAnswerText: string;
   status: string;
   startedAt: string | null;
   completedAt: string | null;
