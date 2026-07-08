@@ -894,6 +894,11 @@ export default function App() {
     tone: "success" | "error";
     message: string;
   } | null>(null);
+  const [isOpeningBackup, setIsOpeningBackup] = useState(false);
+  const [restoreActionState, setRestoreActionState] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [isSavingPathKey, setIsSavingPathKey] = useState<"codexHome" | "databasePath" | null>(
     null
   );
@@ -2184,6 +2189,53 @@ export default function App() {
     }
   }
 
+  async function handleOpenBackupBundle() {
+    setIsOpeningBackup(true);
+    setRestoreActionState(null);
+
+    try {
+      const result = await window.codexCardFeed.openBackupBundle();
+
+      if (result.canceled) {
+        return;
+      }
+
+      if (!result.shellInfo || !result.backupDirectory || !result.databaseBackupPath) {
+        throw new Error("Backup opened without the required metadata.");
+      }
+
+      setShellInfo(result.shellInfo);
+
+      await withLibraryLoad(async () => {
+        await refreshLibraryState(selectedThreadId, selectedTurnId);
+      });
+
+      if (
+        result.suggestedCodexHome &&
+        result.suggestedCodexHome !== result.shellInfo.codexHome
+      ) {
+        setCodexHomeDraft(result.suggestedCodexHome);
+        setRestoreActionState({
+          tone: "success",
+          message: `Opened backup from ${result.backupDirectory}. Review the detected Codex source path before saving.`
+        });
+        return;
+      }
+
+      setRestoreActionState({
+        tone: "success",
+        message: `Opened backup from ${result.backupDirectory}`
+      });
+    } catch (error) {
+      setRestoreActionState({
+        tone: "error",
+        message: getErrorMessage(error)
+      });
+    } finally {
+      setIsOpeningBackup(false);
+    }
+  }
+
   function getMatchingTagValues(tags: string[], searchTerms: string[]) {
     if (!searchTerms.length) {
       return [];
@@ -2349,6 +2401,38 @@ export default function App() {
                     }
                   >
                     {backupActionState.message}
+                  </p>
+                ) : null}
+              </section>
+
+              <section className="path-panel-item">
+                <div className="path-panel-item-header">
+                  <strong>Restore / open backup</strong>
+                  <span className="mini-meta">Switches the current DB immediately</span>
+                </div>
+                <p className="path-panel-value">
+                  <span>Behavior</span>
+                  <span>Opens a backup folder and reuses its SQLite snapshot as the active library</span>
+                </p>
+                <div className="path-panel-actions">
+                  <button
+                    className="sidebar-collapse-toggle"
+                    disabled={!shellInfo || isSavingPathKey !== null || isOpeningBackup}
+                    onClick={() => void handleOpenBackupBundle()}
+                    type="button"
+                  >
+                    {isOpeningBackup ? "Opening..." : "Open Backup"}
+                  </button>
+                </div>
+                {restoreActionState ? (
+                  <p
+                    className={
+                      restoreActionState.tone === "error"
+                        ? "path-panel-error"
+                        : "path-panel-success"
+                    }
+                  >
+                    {restoreActionState.message}
                   </p>
                 ) : null}
               </section>
