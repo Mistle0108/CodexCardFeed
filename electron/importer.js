@@ -962,7 +962,7 @@ function getProjectMetadata(threadId, threadCwd, workspaceRoots, codexHome, code
   return createWorkspaceProjectMetadata(normalizedCwd, codexStateIndex);
 }
 
-function createTurnState(turnId, ordinal) {
+function createTurnState(turnId, ordinal, sourceSessionPath) {
   return {
     id: turnId,
     ordinal,
@@ -971,6 +971,7 @@ function createTurnState(turnId, ordinal) {
     status: "in_progress",
     firstUserSnippet: "",
     fallbackUserSnippet: "",
+    sourceSessionPath,
     itemCounter: 0,
     items: [],
     tokenEvents: []
@@ -1039,7 +1040,7 @@ function parseSessionFile(
 
   function ensureTurn(turnId) {
     if (!turns.has(turnId)) {
-      const turn = createTurnState(turnId, turnOrder.length + 1);
+      const turn = createTurnState(turnId, turnOrder.length + 1, filePath);
       turns.set(turnId, turn);
       turnOrder.push(turnId);
     }
@@ -1464,6 +1465,7 @@ function parseSessionFile(
       status: turn.status,
       firstUserSnippet,
       contentHash: buildTurnContentHash(turn.items),
+      sourceSessionPath: turn.sourceSessionPath,
       lastSeenAt,
       tokenUsage: summarizeTokenEvents(turn.tokenEvents),
       tokenEvents: turn.tokenEvents,
@@ -1506,6 +1508,7 @@ function mergeTurnSnapshots(turns, threadId) {
         completedAt: turn.completedAt,
         status: turn.status,
         firstUserSnippet: turn.firstUserSnippet,
+        sourceSessionPath: turn.sourceSessionPath,
         lastSeenAt: turn.lastSeenAt,
         items: new Map(turn.items.map((item) => [item.id, { ...item }])),
         tokenEvents: new Map(turn.tokenEvents.map((tokenEvent) => [tokenEvent.id, { ...tokenEvent }]))
@@ -1524,6 +1527,14 @@ function mergeTurnSnapshots(turns, threadId) {
       mergedTurn.firstUserSnippet,
       turn.firstUserSnippet
     );
+
+    if (
+      turn.sourceSessionPath &&
+      compareNullableIso(mergedTurn.lastSeenAt, turn.lastSeenAt) < 0
+    ) {
+      mergedTurn.sourceSessionPath = turn.sourceSessionPath;
+    }
+
     mergedTurn.lastSeenAt = pickLaterIso(mergedTurn.lastSeenAt, turn.lastSeenAt);
 
     for (const item of turn.items) {
@@ -1605,6 +1616,7 @@ function mergeTurnSnapshots(turns, threadId) {
         status: turn.completedAt || turn.status === "completed" ? "completed" : "in_progress",
         firstUserSnippet,
         contentHash: buildTurnContentHash(items),
+        sourceSessionPath: turn.sourceSessionPath ?? null,
         lastSeenAt: turn.lastSeenAt,
         tokenUsage: summarizeTokenEvents(tokenEvents),
         tokenEvents,
@@ -1776,6 +1788,7 @@ function upsertTurn(database, turn) {
         status,
         first_user_snippet,
         content_hash,
+        source_session_path,
         last_seen_at,
         input_tokens,
         cached_input_tokens,
@@ -1793,6 +1806,7 @@ function upsertTurn(database, turn) {
         status = excluded.status,
         first_user_snippet = excluded.first_user_snippet,
         content_hash = excluded.content_hash,
+        source_session_path = COALESCE(excluded.source_session_path, turns.source_session_path),
         last_seen_at = excluded.last_seen_at,
         input_tokens = excluded.input_tokens,
         cached_input_tokens = excluded.cached_input_tokens,
@@ -1810,6 +1824,7 @@ function upsertTurn(database, turn) {
       turn.status,
       turn.firstUserSnippet,
       turn.contentHash,
+      turn.sourceSessionPath ?? null,
       turn.lastSeenAt,
       turn.tokenUsage.inputTokens,
       turn.tokenUsage.cachedInputTokens,

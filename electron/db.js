@@ -1,6 +1,6 @@
 const { DatabaseSync } = require("node:sqlite");
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 function createMetaTable(database) {
   database.exec(`
@@ -75,6 +75,7 @@ function migrationTwo(database) {
       status TEXT NOT NULL,
       first_user_snippet TEXT NOT NULL DEFAULT '',
       content_hash TEXT,
+      source_session_path TEXT,
       last_seen_at TEXT NOT NULL,
       FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
       UNIQUE (thread_id, ordinal)
@@ -260,13 +261,20 @@ function migrationSix(database) {
   setMetaValue(database, "schema_version", "6");
 }
 
+function migrationSeven(database) {
+  addColumnIfMissing(database, "turns", "source_session_path", "TEXT");
+
+  setMetaValue(database, "schema_version", "7");
+}
+
 const migrations = [
   { version: 1, apply: migrationOne },
   { version: 2, apply: migrationTwo },
   { version: 3, apply: migrationThree },
   { version: 4, apply: migrationFour },
   { version: 5, apply: migrationFive },
-  { version: 6, apply: migrationSix }
+  { version: 6, apply: migrationSix },
+  { version: 7, apply: migrationSeven }
 ];
 
 function runMigrations(database) {
