@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   openCodexThread(threadId) {
     return ipcRenderer.invoke("app:open-codex-thread", threadId);
   },
+  exportBackupBundle() {
+    return ipcRenderer.invoke("app:export-backup-bundle");
+  },
   saveProjectOverride(projectId, changes) {
     return ipcRenderer.invoke("app:save-project-override", projectId, changes);
   },

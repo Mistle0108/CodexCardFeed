@@ -889,6 +889,11 @@ export default function App() {
   const [codexHomeDraft, setCodexHomeDraft] = useState("");
   const [databasePathDraft, setDatabasePathDraft] = useState("");
   const [pathActionError, setPathActionError] = useState<string | null>(null);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [backupActionState, setBackupActionState] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [isSavingPathKey, setIsSavingPathKey] = useState<"codexHome" | "databasePath" | null>(
     null
   );
@@ -2150,6 +2155,35 @@ export default function App() {
     }
   }
 
+  async function handleExportBackupBundle() {
+    setIsExportingBackup(true);
+    setBackupActionState(null);
+
+    try {
+      const result = await window.codexCardFeed.exportBackupBundle();
+
+      if (result.canceled) {
+        return;
+      }
+
+      if (!result.backupDirectory) {
+        throw new Error("Backup finished without an output directory.");
+      }
+
+      setBackupActionState({
+        tone: "success",
+        message: `Backup saved to ${result.backupDirectory}`
+      });
+    } catch (error) {
+      setBackupActionState({
+        tone: "error",
+        message: getErrorMessage(error)
+      });
+    } finally {
+      setIsExportingBackup(false);
+    }
+  }
+
   function getMatchingTagValues(tags: string[], searchTerms: string[]) {
     if (!searchTerms.length) {
       return [];
@@ -2285,6 +2319,38 @@ export default function App() {
                     Reset
                   </button>
                 </div>
+              </section>
+
+              <section className="path-panel-item">
+                <div className="path-panel-item-header">
+                  <strong>Backup export</strong>
+                  <span className="mini-meta">SQLite snapshot and settings JSON</span>
+                </div>
+                <p className="path-panel-value">
+                  <span>Contents</span>
+                  <span>Database snapshot, path settings, backup manifest</span>
+                </p>
+                <div className="path-panel-actions">
+                  <button
+                    className="sidebar-collapse-toggle"
+                    disabled={!shellInfo || isSavingPathKey !== null || isExportingBackup}
+                    onClick={() => void handleExportBackupBundle()}
+                    type="button"
+                  >
+                    {isExportingBackup ? "Exporting..." : "Export Backup"}
+                  </button>
+                </div>
+                {backupActionState ? (
+                  <p
+                    className={
+                      backupActionState.tone === "error"
+                        ? "path-panel-error"
+                        : "path-panel-success"
+                    }
+                  >
+                    {backupActionState.message}
+                  </p>
+                ) : null}
               </section>
 
               {pathActionError ? <p className="path-panel-error">{pathActionError}</p> : null}

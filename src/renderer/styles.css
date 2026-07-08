@@ -263,6 +263,14 @@ select {
   word-break: break-word;
 }
 
+.path-panel-success {
+  margin: 0;
+  color: #1f7a43;
+  font-size: 0.58rem;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 .sidebar-filter-panel {
   gap: 0;
 }

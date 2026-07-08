@@ -44,7 +44,7 @@ function loadPathSettings(userDataPath, defaultCodexHome) {
   };
 }
 
-function persistPathSettings(pathSettings) {
+function buildStoredPathSettings(pathSettings) {
   const storedSettings = {};
 
   if (pathSettings.codexHome !== pathSettings.defaultCodexHome) {
@@ -55,6 +55,12 @@ function persistPathSettings(pathSettings) {
     storedSettings.databasePath = pathSettings.databasePath;
   }
 
+  return storedSettings;
+}
+
+function persistPathSettings(pathSettings) {
+  const storedSettings = buildStoredPathSettings(pathSettings);
+
   fs.mkdirSync(path.dirname(pathSettings.settingsFilePath), { recursive: true });
   fs.writeFileSync(
     pathSettings.settingsFilePath,
@@ -64,6 +70,7 @@ function persistPathSettings(pathSettings) {
 }
 
 module.exports = {
+  buildStoredPathSettings,
   getDefaultDatabasePath,
   loadPathSettings,
   persistPathSettings
