@@ -969,11 +969,24 @@ select {
   padding: 12px 14px;
 }
 
+.error-card {
+  border-color: rgba(183, 68, 68, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 247, 245, 0.96) 0%, rgba(252, 241, 236, 0.96) 100%);
+}
+
 .error-card h2,
 .modal-header h2 {
   margin: 0 0 4px;
   color: #223045;
   font-size: 0.98rem;
+}
+
+.error-card-hint {
+  margin: 6px 0 0;
+  color: #8d5846;
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 
 .turn-list-panel {
