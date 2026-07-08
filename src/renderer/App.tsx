@@ -894,7 +894,7 @@ export default function App() {
   );
   const [isThreadTitleEditing, setIsThreadTitleEditing] = useState(false);
   const [threadTitleDraft, setThreadTitleDraft] = useState("");
-  const [isThreadMetadataCollapsed, setIsThreadMetadataCollapsed] = useState(false);
+  const [isThreadMetadataCollapsed, setIsThreadMetadataCollapsed] = useState(true);
   const [threadTagInputDraft, setThreadTagInputDraft] = useState("");
   const [threadTagsDraft, setThreadTagsDraft] = useState<string[]>([]);
   const [threadNotesDraft, setThreadNotesDraft] = useState("");
@@ -1258,6 +1258,10 @@ export default function App() {
     setThreadTagsDraft(selectedThread?.tags ?? []);
     setThreadNotesDraft(selectedThread?.notes ?? "");
   }, [selectedThread?.id, selectedThread?.title, selectedThread?.notes, selectedThread?.tags]);
+
+  useEffect(() => {
+    setIsThreadMetadataCollapsed(true);
+  }, [selectedThread?.id]);
 
   useEffect(() => {
     setThreadSearchQuery("");

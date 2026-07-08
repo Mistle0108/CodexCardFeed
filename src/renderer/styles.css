@@ -981,6 +981,7 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .selection-list,
@@ -989,6 +990,7 @@ select {
   min-height: 0;
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .selection-list,
@@ -1092,7 +1094,7 @@ select {
 .question-card-match {
   margin: 0;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   gap: 6px;
   align-items: start;
   color: #314155;
@@ -1118,6 +1120,7 @@ select {
 }
 
 .turn-search-row {
+  grid-template-columns: 42px minmax(0, 1fr);
   font-size: 0.74rem;
   line-height: 1.35;
 }
@@ -1147,6 +1150,7 @@ select {
 .preview-label {
   color: #316fad;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .count-pill,
@@ -1243,6 +1247,7 @@ select {
   display: grid;
   gap: 10px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .detail-meta-panel {
@@ -1299,6 +1304,7 @@ select {
   display: grid;
   grid-template-columns: 72px 1fr;
   gap: 8px;
+  min-width: 0;
 }
 
 .detail-meta dt {
@@ -1311,6 +1317,8 @@ select {
   margin: 0;
   color: #334256;
   font-size: 0.78rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -1346,12 +1354,14 @@ select {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.7);
   border: 1px solid rgba(92, 71, 46, 0.08);
+  min-width: 0;
 }
 
 .detail-item-content {
   margin-top: 10px;
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .detail-item-summary {
@@ -1457,12 +1467,14 @@ select {
   margin: 0;
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .detail-item-meta div {
   display: grid;
   grid-template-columns: 60px 1fr;
   gap: 8px;
+  min-width: 0;
 }
 
 .detail-item-meta div.is-stacked {
@@ -1480,16 +1492,26 @@ select {
   color: #334256;
   font-size: 0.78rem;
   line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
 .detail-query-list {
   margin: 0;
   padding-left: 18px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-query-list li + li {
   margin-top: 4px;
+}
+
+.detail-query-list li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-markdown {
@@ -1501,6 +1523,8 @@ select {
   color: #223045;
   font-size: 0.82rem;
   line-height: 1.6;
+  min-width: 0;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -1569,18 +1593,24 @@ select {
 
 .detail-markdown pre {
   padding: 12px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-radius: 10px;
   background: rgba(44, 58, 78, 0.94);
   color: #f4f7fb;
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 0.76rem;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-markdown code {
   font-family: "Cascadia Code", "Consolas", monospace;
   font-size: 0.76rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-markdown :not(pre) > code {
@@ -1598,6 +1628,7 @@ select {
 
 .detail-markdown table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
 }
 
@@ -1607,6 +1638,8 @@ select {
   border: 1px solid rgba(92, 71, 46, 0.12);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-markdown th {
@@ -1623,12 +1656,16 @@ select {
   color: #2d6cbe;
   text-decoration: underline;
   text-decoration-color: rgba(45, 108, 190, 0.36);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .detail-text {
   margin: 10px 0 0;
   padding: 12px;
-  overflow-x: auto;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid rgba(92, 71, 46, 0.08);
   border-radius: 12px;
   background: #fffaf4;
@@ -1637,6 +1674,7 @@ select {
   font-size: 0.78rem;
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   word-break: break-word;
 }
 
@@ -1981,6 +2019,7 @@ select {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
+  min-width: 0;
 }
 
 .modal-header {
@@ -2006,6 +2045,7 @@ select {
   min-height: 0;
   overflow: auto;
   padding-right: 4px;
+  min-width: 0;
 }
 
 .modal-dialog .detail-body {
