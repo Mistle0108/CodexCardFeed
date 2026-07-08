@@ -84,6 +84,15 @@ type ImportResult = {
   overview: ShellInfo["overview"];
 };
 
+type BackupExportResult = {
+  canceled: boolean;
+  exportedAt: string | null;
+  backupDirectory: string | null;
+  databaseBackupPath: string | null;
+  settingsBackupPath: string | null;
+  manifestPath: string | null;
+};
+
 type ProjectListItem = {
   id: string;
   displayName: string;
@@ -247,6 +256,7 @@ interface Window {
     getShellInfo(): Promise<ShellInfo>;
     importCodexSessions(): Promise<ImportResult>;
     openCodexThread(threadId: string): Promise<void>;
+    exportBackupBundle(): Promise<BackupExportResult>;
     saveProjectOverride(projectId: string, changes: ProjectOverrideInput): Promise<void>;
     saveThreadOverride(threadId: string, changes: LocalOverrideInput): Promise<void>;
     saveTurnOverride(turnId: string, changes: LocalOverrideInput): Promise<void>;

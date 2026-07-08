@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
+const { createBackupBundle } = require("./backup");
 const {
   getDatabaseOverview,
   initializeDatabase,
@@ -154,6 +155,34 @@ function openCodexThread(threadId) {
   return shell.openExternal(`codex://threads/${encodeURIComponent(threadId.trim())}`);
 }
 
+async function exportBackupBundle() {
+  const selection = await dialog.showOpenDialog(mainWindow, {
+    title: "Choose a folder for the CodexCardFeed backup",
+    buttonLabel: "Export backup here",
+    properties: ["openDirectory", "createDirectory"]
+  });
+
+  if (selection.canceled || !selection.filePaths.length) {
+    return {
+      canceled: true,
+      exportedAt: null,
+      backupDirectory: null,
+      databaseBackupPath: null,
+      settingsBackupPath: null,
+      manifestPath: null
+    };
+  }
+
+  return createBackupBundle({
+    database: databaseState.database,
+    databasePath: databaseState.databasePath,
+    schemaVersion: databaseState.schemaVersion,
+    codexHome: getCurrentCodexHome(),
+    pathSettings,
+    destinationRoot: selection.filePaths[0]
+  });
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -195,6 +224,9 @@ app.whenReady().then(() => {
         ...result,
         overview: getDatabaseOverview(databaseState.database)
       };
+    },
+    exportBackupBundle() {
+      return exportBackupBundle();
     },
     openCodexThread(threadId) {
       return openCodexThread(threadId);

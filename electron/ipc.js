@@ -4,6 +4,7 @@ function registerIpcHandlers({
   getShellInfo,
   importSessions,
   openCodexThread,
+  exportBackupBundle,
   saveProjectOverride,
   saveThreadOverride,
   saveTurnOverride,
@@ -28,6 +29,10 @@ function registerIpcHandlers({
 
   ipcMain.handle("app:open-codex-thread", (_event, threadId) => {
     return openCodexThread(threadId);
+  });
+
+  ipcMain.handle("app:export-backup-bundle", () => {
+    return exportBackupBundle();
   });
 
   ipcMain.handle("app:save-thread-override", (_event, threadId, changes) => {
