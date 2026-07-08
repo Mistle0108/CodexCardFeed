@@ -164,6 +164,22 @@ type MetadataFilterable = {
   isPinned: boolean;
 };
 
+type ActionState = {
+  tone: "success" | "error";
+  message: string;
+};
+
+type LoadErrorState = {
+  title: string;
+  message: string;
+  hint?: string;
+};
+
+type LoadErrorFallback = {
+  title: string;
+  hint?: string;
+};
+
 function resolveSelectedId<T extends { id: string }>(
   rows: T[],
   preferredId: string | null
@@ -181,6 +197,134 @@ function getErrorMessage(error: unknown) {
   }
 
   return String(error);
+}
+
+function describeKnownErrorMessage(message: string): LoadErrorState | null {
+  if (message === "Codex source path cannot be empty.") {
+    return {
+      title: "Codex source path is required",
+      message: "Enter a Codex source path before saving.",
+      hint: "Use a folder that contains your local Codex session data."
+    };
+  }
+
+  if (message === "Codex source path must point to an existing directory.") {
+    return {
+      title: "Codex source path is invalid",
+      message: "The Codex source path must point to an existing folder.",
+      hint: "Check the folder path in Paths and save again."
+    };
+  }
+
+  if (message === "Database path cannot be empty.") {
+    return {
+      title: "Database path is required",
+      message: "Enter a database path before saving.",
+      hint: "Use a SQLite file path for the active CodexCardFeed library."
+    };
+  }
+
+  if (message === "Database path must point to a file, not a directory.") {
+    return {
+      title: "Database path is invalid",
+      message: "The database path must point to a file, not a folder.",
+      hint: "Choose a `.sqlite` file path in Paths."
+    };
+  }
+
+  if (message === "Selected backup folder does not exist.") {
+    return {
+      title: "Backup folder not found",
+      message: "The selected backup folder could not be found.",
+      hint: "Choose an existing backup folder created by Export Backup."
+    };
+  }
+
+  if (message === "Failed to parse backup manifest.") {
+    return {
+      title: "Backup manifest is invalid",
+      message: "The selected backup folder contains a manifest file that could not be read.",
+      hint: "Choose a complete CodexCardFeed backup folder or export a new backup."
+    };
+  }
+
+  if (message === "Selected backup folder does not contain codex-card-feed.sqlite.") {
+    return {
+      title: "Backup database is missing",
+      message: "The selected backup folder does not contain `codex-card-feed.sqlite`.",
+      hint: "Choose a complete backup folder created by Export Backup."
+    };
+  }
+
+  if (message === "Backup finished without an output directory.") {
+    return {
+      title: "Backup export failed",
+      message: "Backup export did not return a destination folder.",
+      hint: "Run Export Backup again and choose a writable folder."
+    };
+  }
+
+  if (message === "Backup opened without the required metadata.") {
+    return {
+      title: "Backup open failed",
+      message: "The selected backup did not return the required metadata.",
+      hint: "Try another backup folder or export a new backup first."
+    };
+  }
+
+  return null;
+}
+
+function buildLoadErrorState(
+  error: unknown,
+  fallback: LoadErrorFallback = {
+    title: "Load error"
+  }
+): LoadErrorState {
+  const rawMessage = getErrorMessage(error);
+  const knownError = describeKnownErrorMessage(rawMessage);
+
+  if (knownError) {
+    return knownError;
+  }
+
+  return {
+    title: fallback.title,
+    message: rawMessage,
+    hint: fallback.hint
+  };
+}
+
+function getFriendlyErrorMessage(error: unknown) {
+  return buildLoadErrorState(error, { title: "Error" }).message;
+}
+
+function resolveLoadErrorState(loadError: string | LoadErrorState | null) {
+  if (!loadError) {
+    return null;
+  }
+
+  if (typeof loadError === "string") {
+    return buildLoadErrorState(loadError);
+  }
+
+  return loadError;
+}
+
+function formatPathReloadError(target: "codexHome" | "databasePath") {
+  if (target === "codexHome") {
+    return "Updated the Codex source path, but the library could not be reloaded. Check the load error panel.";
+  }
+
+  return "Updated the database path, but the library could not be reloaded. Check the load error panel.";
+}
+
+function formatBackupReloadError(hasSuggestedCodexHome: boolean) {
+  if (hasSuggestedCodexHome) {
+    return "Opened the backup database, but the library could not be reloaded. Review the detected Codex source path and check the load error panel.";
+  }
+
+  return "Opened the backup database, but the library could not be reloaded. Check the load error panel.";
 }
 
 function clipLargeText(text: string, maxLength = 1600) {
@@ -890,15 +1034,9 @@ export default function App() {
   const [databasePathDraft, setDatabasePathDraft] = useState("");
   const [pathActionError, setPathActionError] = useState<string | null>(null);
   const [isExportingBackup, setIsExportingBackup] = useState(false);
-  const [backupActionState, setBackupActionState] = useState<{
-    tone: "success" | "error";
-    message: string;
-  } | null>(null);
+  const [backupActionState, setBackupActionState] = useState<ActionState | null>(null);
   const [isOpeningBackup, setIsOpeningBackup] = useState(false);
-  const [restoreActionState, setRestoreActionState] = useState<{
-    tone: "success" | "error";
-    message: string;
-  } | null>(null);
+  const [restoreActionState, setRestoreActionState] = useState<ActionState | null>(null);
   const [isSavingPathKey, setIsSavingPathKey] = useState<"codexHome" | "databasePath" | null>(
     null
   );
@@ -922,7 +1060,7 @@ export default function App() {
   const [expandedIntegrityReferenceKeys, setExpandedIntegrityReferenceKeys] = useState<
     Record<string, boolean>
   >({});
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | LoadErrorState | null>(null);
   const [isProjectsCollapsed, setIsProjectsCollapsed] = useState(() =>
     readStoredCollapsedState(PROJECTS_COLLAPSED_STORAGE_KEY)
   );
@@ -1075,6 +1213,7 @@ export default function App() {
     selectedTurn && normalizedTurnNotesDraft !== selectedTurn.notes
   );
   const canClearTurnMemo = Boolean(selectedTurn?.notes);
+  const activeLoadError = resolveLoadErrorState(loadError);
 
   function revealThreadSelection(threadId: string) {
     const nextThread = threads.find((thread) => thread.id === threadId) ?? null;
@@ -1092,14 +1231,22 @@ export default function App() {
     }
   }
 
-  async function withLibraryLoad(task: () => Promise<void>) {
+  async function withLibraryLoad(
+    task: () => Promise<void>,
+    fallback: LoadErrorFallback = {
+      title: "Library load failed",
+      hint: "Check the current paths and try the action again."
+    }
+  ) {
     setIsLibraryLoading(true);
     setLoadError(null);
 
     try {
       await task();
+      return true;
     } catch (error) {
-      setLoadError(getErrorMessage(error));
+      setLoadError(buildLoadErrorState(error, fallback));
+      return false;
     } finally {
       setIsLibraryLoading(false);
     }
@@ -1313,14 +1460,25 @@ export default function App() {
     try {
       await window.codexCardFeed.importCodexSessions();
 
-      await withLibraryLoad(async () => {
-        await Promise.all([
-          refreshLibraryState(selectedThreadId, selectedTurnId),
-          loadShellInfoState()
-        ]);
-      });
+      await withLibraryLoad(
+        async () => {
+          await Promise.all([
+            refreshLibraryState(selectedThreadId, selectedTurnId),
+            loadShellInfoState()
+          ]);
+        },
+        {
+          title: "Import refresh failed",
+          hint: "Import may have completed, but the refreshed library could not be loaded. Check the current paths and run Import Sessions again."
+        }
+      );
     } catch (error) {
-      setLoadError(getErrorMessage(error));
+      setLoadError(
+        buildLoadErrorState(error, {
+          title: "Import failed",
+          hint: "Check the current Codex source path and run Import Sessions again."
+        })
+      );
     } finally {
       setIsImporting(false);
     }
@@ -2096,11 +2254,21 @@ export default function App() {
       const nextShellInfo = await window.codexCardFeed.updateCodexHome(codexHomeDraft);
       setShellInfo(nextShellInfo);
 
-      await withLibraryLoad(async () => {
-        await refreshLibraryState(selectedThreadId, selectedTurnId);
-      });
+      const didReload = await withLibraryLoad(
+        async () => {
+          await refreshLibraryState(selectedThreadId, selectedTurnId);
+        },
+        {
+          title: "Library reload failed",
+          hint: "The updated Codex source path was saved, but the library could not be reloaded."
+        }
+      );
+
+      if (!didReload) {
+        setPathActionError(formatPathReloadError("codexHome"));
+      }
     } catch (error) {
-      setPathActionError(getErrorMessage(error));
+      setPathActionError(getFriendlyErrorMessage(error));
     } finally {
       setIsSavingPathKey(null);
     }
@@ -2114,11 +2282,21 @@ export default function App() {
       const nextShellInfo = await window.codexCardFeed.resetCodexHome();
       setShellInfo(nextShellInfo);
 
-      await withLibraryLoad(async () => {
-        await refreshLibraryState(selectedThreadId, selectedTurnId);
-      });
+      const didReload = await withLibraryLoad(
+        async () => {
+          await refreshLibraryState(selectedThreadId, selectedTurnId);
+        },
+        {
+          title: "Library reload failed",
+          hint: "The updated Codex source path was saved, but the library could not be reloaded."
+        }
+      );
+
+      if (!didReload) {
+        setPathActionError(formatPathReloadError("codexHome"));
+      }
     } catch (error) {
-      setPathActionError(getErrorMessage(error));
+      setPathActionError(getFriendlyErrorMessage(error));
     } finally {
       setIsSavingPathKey(null);
     }
@@ -2132,11 +2310,21 @@ export default function App() {
       const nextShellInfo = await window.codexCardFeed.updateDatabasePath(databasePathDraft);
       setShellInfo(nextShellInfo);
 
-      await withLibraryLoad(async () => {
-        await refreshLibraryState(selectedThreadId, selectedTurnId);
-      });
+      const didReload = await withLibraryLoad(
+        async () => {
+          await refreshLibraryState(selectedThreadId, selectedTurnId);
+        },
+        {
+          title: "Library reload failed",
+          hint: "The updated database path was saved, but the library could not be reloaded."
+        }
+      );
+
+      if (!didReload) {
+        setPathActionError(formatPathReloadError("databasePath"));
+      }
     } catch (error) {
-      setPathActionError(getErrorMessage(error));
+      setPathActionError(getFriendlyErrorMessage(error));
     } finally {
       setIsSavingPathKey(null);
     }
@@ -2150,11 +2338,21 @@ export default function App() {
       const nextShellInfo = await window.codexCardFeed.resetDatabasePath();
       setShellInfo(nextShellInfo);
 
-      await withLibraryLoad(async () => {
-        await refreshLibraryState(selectedThreadId, selectedTurnId);
-      });
+      const didReload = await withLibraryLoad(
+        async () => {
+          await refreshLibraryState(selectedThreadId, selectedTurnId);
+        },
+        {
+          title: "Library reload failed",
+          hint: "The updated database path was saved, but the library could not be reloaded."
+        }
+      );
+
+      if (!didReload) {
+        setPathActionError(formatPathReloadError("databasePath"));
+      }
     } catch (error) {
-      setPathActionError(getErrorMessage(error));
+      setPathActionError(getFriendlyErrorMessage(error));
     } finally {
       setIsSavingPathKey(null);
     }
@@ -2182,7 +2380,7 @@ export default function App() {
     } catch (error) {
       setBackupActionState({
         tone: "error",
-        message: getErrorMessage(error)
+        message: getFriendlyErrorMessage(error)
       });
     } finally {
       setIsExportingBackup(false);
@@ -2206,15 +2404,33 @@ export default function App() {
 
       setShellInfo(result.shellInfo);
 
-      await withLibraryLoad(async () => {
-        await refreshLibraryState(selectedThreadId, selectedTurnId);
-      });
+      const hasSuggestedCodexHome =
+        Boolean(result.suggestedCodexHome) &&
+        result.suggestedCodexHome !== result.shellInfo.codexHome;
 
-      if (
-        result.suggestedCodexHome &&
-        result.suggestedCodexHome !== result.shellInfo.codexHome
-      ) {
+      if (result.suggestedCodexHome && hasSuggestedCodexHome) {
         setCodexHomeDraft(result.suggestedCodexHome);
+      }
+
+      const didReload = await withLibraryLoad(
+        async () => {
+          await refreshLibraryState(selectedThreadId, selectedTurnId);
+        },
+        {
+          title: "Backup reload failed",
+          hint: "The backup database was selected, but the library could not be reloaded from it."
+        }
+      );
+
+      if (!didReload) {
+        setRestoreActionState({
+          tone: "error",
+          message: formatBackupReloadError(hasSuggestedCodexHome)
+        });
+        return;
+      }
+
+      if (hasSuggestedCodexHome) {
         setRestoreActionState({
           tone: "success",
           message: `Opened backup from ${result.backupDirectory}. Review the detected Codex source path before saving.`
@@ -2229,7 +2445,7 @@ export default function App() {
     } catch (error) {
       setRestoreActionState({
         tone: "error",
-        message: getErrorMessage(error)
+        message: getFriendlyErrorMessage(error)
       });
     } finally {
       setIsOpeningBackup(false);
@@ -2841,10 +3057,13 @@ export default function App() {
       </aside>
 
       <section className="workspace-shell">
-        {loadError ? (
+        {activeLoadError ? (
           <section className="card error-card compact-error">
-            <h2>Load error</h2>
-            <p className="muted">{loadError}</p>
+            <h2>{activeLoadError.title}</h2>
+            <p className="muted">{activeLoadError.message}</p>
+            {activeLoadError.hint ? (
+              <p className="error-card-hint">{activeLoadError.hint}</p>
+            ) : null}
           </section>
         ) : null}
 
