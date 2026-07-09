@@ -103,3 +103,70 @@ test("project, thread, and turn overrides persist and clear through exported DB 
     cleanupTestContext(context);
   }
 });
+
+test("listTurnsByThread preserves aggregated search text and first assistant selection", () => {
+  const context = createImportedTestContext();
+
+  try {
+    context.database
+      .prepare(`
+        INSERT INTO items (
+          id,
+          turn_id,
+          ordinal,
+          role,
+          kind,
+          text_content,
+          raw_json,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        "item-6",
+        context.turnId,
+        6,
+        "assistant",
+        "message",
+        "Drafting a follow-up note.",
+        "{}",
+        "2026-07-10T00:00:08.500Z"
+      );
+    context.database
+      .prepare(`
+        INSERT INTO items (
+          id,
+          turn_id,
+          ordinal,
+          role,
+          kind,
+          text_content,
+          raw_json,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        "item-7",
+        context.turnId,
+        7,
+        "assistant",
+        "message:final_answer",
+        "Then collapse the detail rows.",
+        "{}",
+        "2026-07-10T00:00:08.750Z"
+      );
+
+    const turn = listTurnsByThread(context.database, context.sessionId)[0];
+
+    assert.equal(turn.firstAssistantSnippet, "Build it with cards and filters.");
+    assert.equal(
+      turn.searchFinalAnswerText,
+      "Build it with cards and filters.\n\nThen collapse the detail rows."
+    );
+    assert.equal(turn.searchUserText, "How do I build a card UI?");
+    assert.equal(turn.itemCount, 7);
+  } finally {
+    cleanupTestContext(context);
+  }
+});

@@ -482,91 +482,144 @@ function listThreadsByProject(database, projectId) {
 function listTurnsByThread(database, threadId) {
   return database
     .prepare(`
+      WITH thread_turns AS (
+        SELECT
+          turns.id,
+          turns.thread_id,
+          turns.ordinal,
+          turn_overrides.display_title,
+          turn_overrides.tags_json,
+          turn_overrides.notes,
+          turns.first_user_snippet,
+          turns.status,
+          turns.started_at,
+          turns.completed_at,
+          turns.last_seen_at,
+          turns.input_tokens,
+          turns.cached_input_tokens,
+          turns.output_tokens,
+          turns.reasoning_output_tokens,
+          turns.total_tokens,
+          turns.token_event_count,
+          COALESCE(turn_overrides.pinned, 0) AS is_pinned
+        FROM turns
+        LEFT JOIN turn_overrides
+          ON turn_overrides.turn_id = turns.id
+        WHERE turns.thread_id = ?
+      ),
+      thread_items AS (
+        SELECT
+          items.turn_id,
+          items.ordinal,
+          items.role,
+          items.kind,
+          items.text_content
+        FROM items
+        INNER JOIN thread_turns
+          ON thread_turns.id = items.turn_id
+      ),
+      item_counts AS (
+        SELECT
+          turn_id,
+          COUNT(*) AS item_count
+        FROM thread_items
+        GROUP BY turn_id
+      ),
+      user_search_rows AS (
+        SELECT
+          turn_id,
+          text_content,
+          ordinal
+        FROM thread_items
+        WHERE role = 'user'
+          AND kind <> 'message:bootstrap_context'
+          AND COALESCE(text_content, '') <> ''
+        ORDER BY turn_id ASC, ordinal ASC
+      ),
+      user_search AS (
+        SELECT
+          turn_id,
+          group_concat(text_content, char(10) || char(10)) AS search_user_text
+        FROM user_search_rows
+        GROUP BY turn_id
+      ),
+      assistant_candidates AS (
+        SELECT
+          turn_id,
+          text_content,
+          ROW_NUMBER() OVER (
+            PARTITION BY turn_id
+            ORDER BY
+              CASE
+                WHEN kind = 'message:final_answer' THEN 0
+                ELSE 1
+              END ASC,
+              ordinal ASC
+          ) AS row_number
+        FROM thread_items
+        WHERE role = 'assistant'
+          AND kind LIKE 'message%'
+          AND COALESCE(text_content, '') <> ''
+      ),
+      first_assistant_messages AS (
+        SELECT
+          turn_id,
+          text_content AS first_assistant_snippet
+        FROM assistant_candidates
+        WHERE row_number = 1
+      ),
+      final_answer_rows AS (
+        SELECT
+          turn_id,
+          text_content,
+          ordinal
+        FROM thread_items
+        WHERE kind = 'message:final_answer'
+          AND COALESCE(text_content, '') <> ''
+        ORDER BY turn_id ASC, ordinal ASC
+      ),
+      final_answer_search AS (
+        SELECT
+          turn_id,
+          group_concat(text_content, char(10) || char(10)) AS search_final_answer_text
+        FROM final_answer_rows
+        GROUP BY turn_id
+      )
       SELECT
-        turns.id,
-        turns.thread_id,
-        turns.ordinal,
-        turn_overrides.display_title,
-        turn_overrides.tags_json,
-        turn_overrides.notes,
-        turns.first_user_snippet,
-        (
-          SELECT group_concat(search_user_items.text_content, char(10) || char(10))
-          FROM (
-            SELECT user_items.text_content
-            FROM items AS user_items
-            WHERE user_items.turn_id = turns.id
-              AND user_items.role = 'user'
-              AND user_items.kind <> 'message:bootstrap_context'
-              AND COALESCE(user_items.text_content, '') <> ''
-            ORDER BY user_items.ordinal ASC
-          ) AS search_user_items
-        ) AS search_user_text,
-        (
-          SELECT assistant_items.text_content
-          FROM items AS assistant_items
-          WHERE assistant_items.turn_id = turns.id
-            AND assistant_items.role = 'assistant'
-            AND assistant_items.kind LIKE 'message%'
-            AND COALESCE(assistant_items.text_content, '') <> ''
-          ORDER BY
-            CASE
-              WHEN assistant_items.kind = 'message:final_answer' THEN 0
-              ELSE 1
-            END ASC,
-            assistant_items.ordinal ASC
-          LIMIT 1
-        ) AS first_assistant_snippet,
-        (
-          SELECT group_concat(search_answer_items.text_content, char(10) || char(10))
-          FROM (
-            SELECT answer_items.text_content
-            FROM items AS answer_items
-            WHERE answer_items.turn_id = turns.id
-              AND answer_items.kind = 'message:final_answer'
-              AND COALESCE(answer_items.text_content, '') <> ''
-            ORDER BY answer_items.ordinal ASC
-          ) AS search_answer_items
-        ) AS search_final_answer_text,
-        turns.status,
-        turns.started_at,
-        turns.completed_at,
-        turns.last_seen_at,
-        turns.input_tokens,
-        turns.cached_input_tokens,
-        turns.output_tokens,
-        turns.reasoning_output_tokens,
-        turns.total_tokens,
-        turns.token_event_count,
-        MAX(COALESCE(turn_overrides.pinned, 0)) AS is_pinned,
-        COUNT(items.id) AS item_count
-      FROM turns
-      LEFT JOIN items
-        ON items.turn_id = turns.id
-      LEFT JOIN turn_overrides
-        ON turn_overrides.turn_id = turns.id
-      WHERE turns.thread_id = ?
-      GROUP BY
-        turns.id,
-        turns.thread_id,
-        turns.ordinal,
-        turn_overrides.display_title,
-        turn_overrides.tags_json,
-        turn_overrides.notes,
-        turns.first_user_snippet,
-        turns.status,
-        turns.started_at,
-        turns.completed_at,
-        turns.last_seen_at,
-        turns.input_tokens,
-        turns.cached_input_tokens,
-        turns.output_tokens,
-        turns.reasoning_output_tokens,
-        turns.total_tokens,
-        turns.token_event_count
+        thread_turns.id,
+        thread_turns.thread_id,
+        thread_turns.ordinal,
+        thread_turns.display_title,
+        thread_turns.tags_json,
+        thread_turns.notes,
+        thread_turns.first_user_snippet,
+        user_search.search_user_text,
+        first_assistant_messages.first_assistant_snippet,
+        final_answer_search.search_final_answer_text,
+        thread_turns.status,
+        thread_turns.started_at,
+        thread_turns.completed_at,
+        thread_turns.last_seen_at,
+        thread_turns.input_tokens,
+        thread_turns.cached_input_tokens,
+        thread_turns.output_tokens,
+        thread_turns.reasoning_output_tokens,
+        thread_turns.total_tokens,
+        thread_turns.token_event_count,
+        thread_turns.is_pinned,
+        COALESCE(item_counts.item_count, 0) AS item_count
+      FROM thread_turns
+      LEFT JOIN user_search
+        ON user_search.turn_id = thread_turns.id
+      LEFT JOIN first_assistant_messages
+        ON first_assistant_messages.turn_id = thread_turns.id
+      LEFT JOIN final_answer_search
+        ON final_answer_search.turn_id = thread_turns.id
+      LEFT JOIN item_counts
+        ON item_counts.turn_id = thread_turns.id
       ORDER BY
-        is_pinned DESC,
-        turns.ordinal DESC
+        thread_turns.is_pinned DESC,
+        thread_turns.ordinal DESC
     `)
     .all(threadId)
     .map((row) => ({
