@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   groupThreadsByProjectId,
   hasActiveMetadataFilters,
@@ -30,49 +30,106 @@ export function useBrowseViewState({
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [rightPanelMode, setRightPanelMode] = useState<"turns" | "questions">("turns");
 
-  const normalizedSidebarSearchTerms = normalizeSearchTerms(metadataTagFilter);
-  const normalizedThreadSearchTerms = normalizeSearchTerms(threadSearchQuery);
-  const metadataFilters: MetadataFilterState = {
-    searchTerms: normalizedSidebarSearchTerms,
-    pinnedOnly: isPinnedFilterActive,
-    memoOnly: isMemoFilterActive
-  };
-  const isMetadataFilterActive = hasActiveMetadataFilters(metadataFilters);
-  const isThreadSearchActive = normalizedThreadSearchTerms.length > 0;
-  const visibleTurns = isThreadSearchActive
-    ? turns.filter((turn) => matchesTurnThreadSearch(turn, normalizedThreadSearchTerms))
-    : turns;
-  const questionTurns = visibleTurns;
-  const primaryTurnItems = turnItems.filter((item) => isPrimaryDetailItem(item));
-  const additionalTurnItems = turnItems.filter((item) => !isPrimaryDetailItem(item));
-  const activeProjects = projects.filter((project) => project.projectStatus === "active");
-  const allProjectIds = new Set(projects.map((project) => project.id));
-  const projectThreads = threads.filter((thread) => allProjectIds.has(thread.projectId));
-  const chatThreads = threads.filter((thread) => !allProjectIds.has(thread.projectId));
-  const matchingProjectThreads = isMetadataFilterActive
-    ? projectThreads.filter((thread) =>
-        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
-      )
-    : projectThreads;
-  const matchingChatThreads = isMetadataFilterActive
-    ? chatThreads.filter((thread) =>
-        matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
-      )
-    : chatThreads;
-  const matchingProjectThreadsByProjectId = groupThreadsByProjectId(matchingProjectThreads);
-  const threadsByProjectId = groupThreadsByProjectId(projectThreads);
-  const sidebarProjects = activeProjects.filter((project) => {
-    if (!isMetadataFilterActive) {
-      return true;
+  const deferredMetadataTagFilter = useDeferredValue(metadataTagFilter);
+  const deferredThreadSearchQuery = useDeferredValue(threadSearchQuery);
+  const normalizedSidebarSearchTerms = useMemo(
+    () => normalizeSearchTerms(deferredMetadataTagFilter),
+    [deferredMetadataTagFilter]
+  );
+  const normalizedThreadSearchTerms = useMemo(
+    () => normalizeSearchTerms(deferredThreadSearchQuery),
+    [deferredThreadSearchQuery]
+  );
+
+  const {
+    activeProjects,
+    additionalTurnItems,
+    allHistoricalProjects,
+    chatThreads,
+    historicalProjects,
+    isMetadataFilterActive,
+    isThreadSearchActive,
+    matchingChatThreads,
+    matchingProjectThreadsByProjectId,
+    primaryTurnItems,
+    questionTurns,
+    sidebarProjects,
+    threadsByProjectId,
+    visibleTurns
+  } = useMemo(() => {
+    const metadataFilters: MetadataFilterState = {
+      searchTerms: normalizedSidebarSearchTerms,
+      pinnedOnly: isPinnedFilterActive,
+      memoOnly: isMemoFilterActive
+    };
+    const nextIsMetadataFilterActive = hasActiveMetadataFilters(metadataFilters);
+    const nextIsThreadSearchActive = normalizedThreadSearchTerms.length > 0;
+    const nextVisibleTurns = nextIsThreadSearchActive
+      ? turns.filter((turn) => matchesTurnThreadSearch(turn, normalizedThreadSearchTerms))
+      : turns;
+
+    const nextPrimaryTurnItems: TurnItem[] = [];
+    const nextAdditionalTurnItems: TurnItem[] = [];
+
+    for (const item of turnItems) {
+      if (isPrimaryDetailItem(item)) {
+        nextPrimaryTurnItems.push(item);
+        continue;
+      }
+
+      nextAdditionalTurnItems.push(item);
     }
 
-    return (
-      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
-      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
-    );
-  });
-  const allHistoricalProjects = [...projects.filter((project) => project.projectStatus !== "active")]
-    .sort((left, right) => {
+    const nextActiveProjects: ProjectListItem[] = [];
+    const nextHistoricalProjectsBase: ProjectListItem[] = [];
+    const allProjectIds = new Set<string>();
+
+    for (const project of projects) {
+      allProjectIds.add(project.id);
+
+      if (project.projectStatus === "active") {
+        nextActiveProjects.push(project);
+        continue;
+      }
+
+      nextHistoricalProjectsBase.push(project);
+    }
+
+    const projectThreads: ThreadListItem[] = [];
+    const nextChatThreads: ThreadListItem[] = [];
+
+    for (const thread of threads) {
+      if (allProjectIds.has(thread.projectId)) {
+        projectThreads.push(thread);
+        continue;
+      }
+
+      nextChatThreads.push(thread);
+    }
+
+    const matchingProjectThreads = nextIsMetadataFilterActive
+      ? projectThreads.filter((thread) =>
+          matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+        )
+      : projectThreads;
+    const nextMatchingChatThreads = nextIsMetadataFilterActive
+      ? nextChatThreads.filter((thread) =>
+          matchesMetadataFilters(thread, metadataFilters, [thread.title, ...thread.tags])
+        )
+      : nextChatThreads;
+    const nextMatchingProjectThreadsByProjectId = groupThreadsByProjectId(matchingProjectThreads);
+    const nextThreadsByProjectId = groupThreadsByProjectId(projectThreads);
+    const nextSidebarProjects = nextActiveProjects.filter((project) => {
+      if (!nextIsMetadataFilterActive) {
+        return true;
+      }
+
+      return (
+        matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
+        Boolean(nextMatchingProjectThreadsByProjectId[project.id]?.length)
+      );
+    });
+    const nextAllHistoricalProjects = [...nextHistoricalProjectsBase].sort((left, right) => {
       if (left.projectStatus === right.projectStatus) {
         return 0;
       }
@@ -87,34 +144,61 @@ export function useBrowseViewState({
 
       return 0;
     });
-  const historicalProjects = allHistoricalProjects.filter((project) => {
-    if (!isMetadataFilterActive) {
-      return true;
-    }
+    const nextHistoricalProjects = nextAllHistoricalProjects.filter((project) => {
+      if (!nextIsMetadataFilterActive) {
+        return true;
+      }
 
-    return (
-      matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
-      Boolean(matchingProjectThreadsByProjectId[project.id]?.length)
-    );
-  });
+      return (
+        matchesMetadataFilters(project, metadataFilters, [project.displayName, ...project.tags]) ||
+        Boolean(nextMatchingProjectThreadsByProjectId[project.id]?.length)
+      );
+    });
 
-  function handleResetMetadataFilters() {
+    return {
+      activeProjects: nextActiveProjects,
+      additionalTurnItems: nextAdditionalTurnItems,
+      allHistoricalProjects: nextAllHistoricalProjects,
+      chatThreads: nextChatThreads,
+      historicalProjects: nextHistoricalProjects,
+      isMetadataFilterActive: nextIsMetadataFilterActive,
+      isThreadSearchActive: nextIsThreadSearchActive,
+      matchingChatThreads: nextMatchingChatThreads,
+      matchingProjectThreadsByProjectId: nextMatchingProjectThreadsByProjectId,
+      primaryTurnItems: nextPrimaryTurnItems,
+      questionTurns: nextVisibleTurns,
+      sidebarProjects: nextSidebarProjects,
+      threadsByProjectId: nextThreadsByProjectId,
+      visibleTurns: nextVisibleTurns
+    };
+  }, [
+    isMemoFilterActive,
+    isPinnedFilterActive,
+    normalizedSidebarSearchTerms,
+    normalizedThreadSearchTerms,
+    projects,
+    threads,
+    turnItems,
+    turns
+  ]);
+
+  const handleResetMetadataFilters = useCallback(() => {
     setMetadataTagFilter("");
     setIsPinnedFilterActive(false);
     setIsMemoFilterActive(false);
-  }
+  }, []);
 
-  function handleClearThreadSearch() {
+  const handleClearThreadSearch = useCallback(() => {
     setThreadSearchQuery("");
-  }
+  }, []);
 
-  function handleTogglePinnedFilter() {
+  const handleTogglePinnedFilter = useCallback(() => {
     setIsPinnedFilterActive((value) => !value);
-  }
+  }, []);
 
-  function handleToggleMemoFilter() {
+  const handleToggleMemoFilter = useCallback(() => {
     setIsMemoFilterActive((value) => !value);
-  }
+  }, []);
 
   useEffect(() => {
     setThreadSearchQuery("");
