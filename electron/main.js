@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, shell } = require("electron");
 const { createBackupBundle } = require("./backup");
+const { createBackgroundTaskRunner, defaultWorkerScriptPath } = require("./background-tasks");
 const {
   getDatabaseOverview,
   initializeDatabase,
@@ -13,11 +14,8 @@ const {
   saveThreadOverride: persistThreadOverride,
   saveTurnOverride: persistTurnOverride
 } = require("./db");
-const { runIntegrityCheck } = require("./integrity");
 const {
   getDefaultCodexHome,
-  importCodexSessions,
-  runSessionDiagnosis,
   listSidebarWorkspaceRoots
 } = require("./importer");
 const { getDefaultDatabasePath, loadPathSettings, persistPathSettings } = require("./path-settings");
@@ -26,6 +24,7 @@ const { registerIpcHandlers } = require("./ipc");
 let mainWindow = null;
 let databaseState = null;
 let pathSettings = null;
+const backgroundTaskRunner = createBackgroundTaskRunner(defaultWorkerScriptPath);
 
 function normalizePathForComparison(sourcePath) {
   const normalizedWorkspaceRoot = path.normalize(sourcePath);
@@ -89,6 +88,8 @@ function validateDatabasePath(databasePath) {
 }
 
 function updateCodexHome(nextCodexHome) {
+  backgroundTaskRunner.assertIdle("Changing the Codex source path");
+
   const resolvedCodexHome = resolveConfiguredPath(nextCodexHome, "Codex source path");
   validateCodexHomePath(resolvedCodexHome);
 
@@ -103,6 +104,8 @@ function updateCodexHome(nextCodexHome) {
 }
 
 function reopenDatabaseAtPath(nextDatabasePath) {
+  backgroundTaskRunner.assertIdle("Changing the database path");
+
   const resolvedDatabasePath = resolveConfiguredPath(nextDatabasePath, "Database path");
   validateDatabasePath(resolvedDatabasePath);
 
@@ -156,6 +159,8 @@ function openCodexThread(threadId) {
 }
 
 async function exportBackupBundle() {
+  backgroundTaskRunner.assertIdle("Exporting a backup");
+
   const selection = await dialog.showOpenDialog(mainWindow, {
     title: "Choose a folder for the CodexCardFeed backup",
     buttonLabel: "Export backup here",
@@ -184,6 +189,8 @@ async function exportBackupBundle() {
 }
 
 async function openBackupBundle() {
+  backgroundTaskRunner.assertIdle("Opening a backup");
+
   const selection = await dialog.showOpenDialog(mainWindow, {
     title: "Choose a CodexCardFeed backup folder",
     buttonLabel: "Open backup",
@@ -247,13 +254,10 @@ app.whenReady().then(() => {
       return buildShellInfo();
     },
     importSessions() {
-      const result = importCodexSessions(databaseState.database, {
+      return backgroundTaskRunner.runImportSessions({
+        databasePath: databaseState.databasePath,
         codexHome: getCurrentCodexHome()
       });
-      return {
-        ...result,
-        overview: getDatabaseOverview(databaseState.database)
-      };
     },
     exportBackupBundle() {
       return exportBackupBundle();
@@ -265,12 +269,15 @@ app.whenReady().then(() => {
       return openCodexThread(threadId);
     },
     saveProjectOverride(projectId, changes) {
+      backgroundTaskRunner.assertIdle("Saving local metadata");
       return persistProjectOverride(databaseState.database, projectId, changes);
     },
     saveThreadOverride(threadId, changes) {
+      backgroundTaskRunner.assertIdle("Saving local metadata");
       return persistThreadOverride(databaseState.database, threadId, changes);
     },
     saveTurnOverride(turnId, changes) {
+      backgroundTaskRunner.assertIdle("Saving local metadata");
       return persistTurnOverride(databaseState.database, turnId, changes);
     },
     updateCodexHome(codexHome) {
@@ -286,10 +293,13 @@ app.whenReady().then(() => {
       return reopenDatabaseAtPath(pathSettings.defaultDatabasePath);
     },
     runIntegrityCheck() {
-      return runIntegrityCheck(databaseState.database);
+      return backgroundTaskRunner.runIntegrityCheck({
+        databasePath: databaseState.databasePath
+      });
     },
     runSessionDiagnosis() {
-      return runSessionDiagnosis(databaseState.database, {
+      return backgroundTaskRunner.runSessionDiagnosis({
+        databasePath: databaseState.databasePath,
         codexHome: getCurrentCodexHome()
       });
     },
