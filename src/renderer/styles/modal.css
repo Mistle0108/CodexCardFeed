@@ -1,0 +1,55 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  background: rgba(72, 78, 88, 0.26);
+  backdrop-filter: blur(6px);
+}
+
+.modal-dialog {
+  width: min(1040px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 16px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-header h2 {
+  margin: 0;
+  color: #223045;
+  font-size: 1.2rem;
+}
+
+.modal-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+  min-width: 0;
+}
+
+.modal-dialog .detail-body {
+  margin-top: 0;
+}
+
+.modal-dialog .detail-items {
+  overflow: visible;
+}
+
