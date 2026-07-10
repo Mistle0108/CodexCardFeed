@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron electron/main.js\"",
     "build": "vite build",
+    "dist:win": "npm run build && electron-builder --win portable",
     "preview": "vite preview",
     "test": "node --test tests/electron/importer.test.js tests/electron/db.test.js tests/electron/background-tasks.test.js",
     "typecheck": "tsc --noEmit"
@@ -25,8 +26,35 @@
     "concurrently": "^9.2.0",
     "cross-env": "^10.0.0",
     "electron": "^37.2.1",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.8.3",
     "vite": "^7.0.0",
     "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.mistle0108.codexcardfeed",
+    "productName": "CodexCardFeed",
+    "asar": false,
+    "directories": {
+      "output": "release-portable"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-portable.${ext}"
+    }
   }
 }
