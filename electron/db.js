@@ -1,6 +1,13 @@
 const { DatabaseSync } = require("node:sqlite");
+const {
+  createTurnSearchSchema,
+  ensureTurnSearchIndex,
+  rebuildTurnSearchIndex,
+  refreshTurnSearchDocument,
+  searchTurns
+} = require("./search-index");
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 function createMetaTable(database) {
   database.exec(`
@@ -260,13 +267,20 @@ function migrationSix(database) {
   setMetaValue(database, "schema_version", "6");
 }
 
+function migrationSeven(database) {
+  createTurnSearchSchema(database);
+  rebuildTurnSearchIndex(database);
+  setMetaValue(database, "schema_version", "7");
+}
+
 const migrations = [
   { version: 1, apply: migrationOne },
   { version: 2, apply: migrationTwo },
   { version: 3, apply: migrationThree },
   { version: 4, apply: migrationFour },
   { version: 5, apply: migrationFive },
-  { version: 6, apply: migrationSix }
+  { version: 6, apply: migrationSix },
+  { version: 7, apply: migrationSeven }
 ];
 
 function runMigrations(database) {
@@ -1049,6 +1063,7 @@ function saveTurnOverride(database, turnId, changes) {
     !resolvedNotes
   ) {
     database.prepare("DELETE FROM turn_overrides WHERE turn_id = ?").run(turnId);
+    refreshTurnSearchDocument(database, turnId);
     return;
   }
 
@@ -1078,6 +1093,8 @@ function saveTurnOverride(database, turnId, changes) {
       resolvedNotes,
       new Date().toISOString()
     );
+
+  refreshTurnSearchDocument(database, turnId);
 }
 
 function initializeDatabase(databasePath) {
@@ -1087,6 +1104,7 @@ function initializeDatabase(databasePath) {
   database.exec("PRAGMA busy_timeout = 5000");
 
   const schemaVersion = runMigrations(database);
+  ensureTurnSearchIndex(database);
   const overview = getDatabaseOverview(database);
 
   return {
@@ -1105,6 +1123,7 @@ module.exports = {
   listThreadsByProject,
   listTurnsByThread,
   listItemsByTurn,
+  searchTurns,
   saveProjectOverride,
   saveThreadOverride,
   saveTurnOverride

@@ -25,6 +25,9 @@ import { getItemPresentation, isMarkdownDetailItem } from "../lib/turn-item-pres
 
 type BrowseViewState = ReturnType<typeof import("../hooks/useBrowseViewState").useBrowseViewState>;
 type LibraryState = ReturnType<typeof import("../hooks/useLibraryData").useLibraryData>;
+type GlobalSearchState = ReturnType<
+  typeof import("../hooks/useGlobalTurnSearch").useGlobalTurnSearch
+>;
 type MaintenanceState = ReturnType<
   typeof import("../hooks/useMaintenanceActions").useMaintenanceActions
 >;
@@ -36,12 +39,15 @@ type SidebarState = ReturnType<typeof import("../hooks/useSidebarState").useSide
 
 type AppViewPropsArgs = {
   libraryState: LibraryState;
+  globalSearchState: GlobalSearchState;
   sidebarState: SidebarState;
   selectionState: SelectionState;
   metadataManagement: MetadataManagementState;
   maintenanceState: MaintenanceState;
   browseViewState: BrowseViewState;
   handleImportSessions: () => Promise<void>;
+  handleOpenGlobalSearchResult: (result: TurnSearchResult) => void;
+  handleThreadSelectInWorkspace: (threadId: string) => void;
   handleProjectTagInputKeyDown: ComponentProps<
     typeof ProjectDetailModal
   >["onProjectTagInputKeyDown"];
@@ -59,12 +65,15 @@ type AppViewPropsArgs = {
 
 export function useAppViewProps({
   libraryState,
+  globalSearchState,
   sidebarState,
   selectionState,
   metadataManagement,
   maintenanceState,
   browseViewState,
   handleImportSessions,
+  handleOpenGlobalSearchResult,
+  handleThreadSelectInWorkspace,
   handleProjectTagInputKeyDown,
   handleThreadTagInputKeyDown,
   handleTurnTagInputKeyDown,
@@ -116,7 +125,7 @@ export function useAppViewProps({
     onResetMetadataFilters: browseViewState.handleResetMetadataFilters,
     onSaveCodexHome: maintenanceState.handleSaveCodexHome,
     onSaveDatabasePath: maintenanceState.handleSaveDatabasePath,
-    onThreadSelect: selectionState.handleThreadSelect,
+    onThreadSelect: handleThreadSelectInWorkspace,
     onToggleChatsCollapsed: sidebarState.handleToggleChatsCollapsed,
     onToggleHistoricalCollapsed: sidebarState.handleToggleHistoricalCollapsed,
     onToggleMemoFilter: browseViewState.handleToggleMemoFilter,
@@ -134,6 +143,8 @@ export function useAppViewProps({
   };
 
   const workspacePanelProps: ComponentProps<typeof WorkspacePanel> = {
+    activeSearchTab: globalSearchState.activeSearchTab,
+    activeWorkspaceTabId: globalSearchState.activeWorkspaceTabId,
     canAddThreadTag: metadataManagement.canAddThreadTag,
     canClearThreadMemo: metadataManagement.canClearThreadMemo,
     canResetThreadTitle: metadataManagement.canResetThreadTitle,
@@ -158,12 +169,19 @@ export function useAppViewProps({
     onCancelThreadTitleEdit: metadataManagement.handleCancelThreadTitleEdit,
     onClearThreadMemo: metadataManagement.handleClearThreadMemo,
     onClearThreadSearch: browseViewState.handleClearThreadSearch,
+    onCloseSearchTab: globalSearchState.handleCloseSearchTab,
+    onGlobalSearchInputChange: globalSearchState.setSearchInput,
+    onLoadMoreSearchResults: globalSearchState.handleLoadMoreSearchResults,
     onOpenCodexThread: maintenanceState.handleOpenCodexThread,
+    onOpenGlobalSearchResult: handleOpenGlobalSearchResult,
     onOpenTurnDetail: selectionState.handleOpenTurnDetail,
     onRemoveThreadTag: metadataManagement.handleRemoveThreadTag,
     onResetThreadMemoDraft: metadataManagement.handleResetThreadMemoDraft,
     onResetThreadTitle: metadataManagement.handleResetThreadTitle,
     onRightPanelModeChange: browseViewState.setRightPanelMode,
+    onSearchResultScroll: globalSearchState.handleSearchScroll,
+    onSelectSearchTab: globalSearchState.handleSelectSearchTab,
+    onSelectThreadTab: globalSearchState.handleSelectThreadTab,
     onSaveThreadMemo: metadataManagement.handleSaveThreadMemo,
     onSaveThreadTitle: metadataManagement.handleSaveThreadTitle,
     onStartThreadTitleEdit: metadataManagement.handleStartThreadTitleEdit,
@@ -174,9 +192,12 @@ export function useAppViewProps({
     onThreadTitleDraftChange: metadataManagement.setThreadTitleDraft,
     onToggleThreadMetadataCollapsed: metadataManagement.handleToggleThreadMetadataCollapsed,
     onToggleThreadPin: metadataManagement.handleToggleThreadPin,
+    onSubmitGlobalSearch: globalSearchState.handleSubmitSearch,
     questionTurns: browseViewState.questionTurns,
     renderHighlightedText,
     rightPanelMode: browseViewState.rightPanelMode,
+    searchInput: globalSearchState.searchInput,
+    searchTabs: globalSearchState.searchTabs,
     selectedThread: metadataManagement.selectedThread,
     selectedTurnId: selectionState.selectedTurnId,
     threadNotesDraft: metadataManagement.threadNotesDraft,

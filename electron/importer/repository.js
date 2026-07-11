@@ -3,6 +3,7 @@ const {
   SOURCE_FILE_STATUS_ACTIVE
 } = require("./constants");
 const { listValidationLogEntries } = require("./validation");
+const { refreshThreadSearchDocuments } = require("../search-index");
 
 function upsertProject(database, project, importedAt) {
   database
@@ -351,6 +352,7 @@ function reconcileThreadSnapshot(database, mergedSession, importedAt) {
   }
 
   deleteStaleTurnsForThread(database, mergedSession.thread.id, turnIds);
+  refreshThreadSearchDocuments(database, mergedSession.thread.id);
 }
 
 function pruneEmptyProjects(database) {

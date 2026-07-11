@@ -54,5 +54,8 @@ contextBridge.exposeInMainWorld("codexCardFeed", {
   },
   listTurnItems(turnId) {
     return ipcRenderer.invoke("library:list-turn-items", turnId);
+  },
+  searchTurns(query, options) {
+    return ipcRenderer.invoke("library:search-turns", query, options);
   }
 });

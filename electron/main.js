@@ -10,6 +10,7 @@ const {
   listThreads,
   listTurnsByThread,
   listItemsByTurn,
+  searchTurns: searchTurnRows,
   saveProjectOverride: persistProjectOverride,
   saveThreadOverride: persistThreadOverride,
   saveTurnOverride: persistTurnOverride
@@ -333,6 +334,9 @@ app.whenReady().then(() => {
     },
     listTurnItems(turnId) {
       return listItemsByTurn(databaseState.database, turnId);
+    },
+    searchTurns(query, options) {
+      return searchTurnRows(databaseState.database, query, options);
     }
   });
 

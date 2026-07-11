@@ -5,6 +5,7 @@ import { TurnDetailModal } from "./components/TurnDetailModal";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { useAppViewEffects } from "./hooks/useAppViewEffects";
 import { useBrowseViewState } from "./hooks/useBrowseViewState";
+import { useGlobalTurnSearch } from "./hooks/useGlobalTurnSearch";
 import { useLibraryData } from "./hooks/useLibraryData";
 import { useMaintenanceActions } from "./hooks/useMaintenanceActions";
 import { useMetadataManagement } from "./hooks/useMetadataManagement";
@@ -56,8 +57,10 @@ export default function App() {
     turnItems: libraryState.turnItems,
     turns: libraryState.turns
   });
+  const globalSearchState = useGlobalTurnSearch();
 
   useAppViewEffects({
+    activeWorkspaceTabId: globalSearchState.activeWorkspaceTabId,
     integrityCheckedAt: maintenanceState.integrityReport?.checkedAt,
     isDiagnosticsModalOpen: selectionState.isDiagnosticsModalOpen,
     rightPanelMode: browseViewState.rightPanelMode,
@@ -74,7 +77,20 @@ export default function App() {
 
     if (nextSelection) {
       selectionState.applyLibrarySelection(nextSelection);
+      globalSearchState.refreshActiveSearch();
     }
+  }
+
+  function handleThreadSelectInWorkspace(threadId: string) {
+    globalSearchState.handleSelectThreadTab();
+    selectionState.handleThreadSelect(threadId);
+  }
+
+  function handleOpenGlobalSearchResult(result: TurnSearchResult) {
+    selectionState.handleOpenSearchResult(result, () => {
+      globalSearchState.handleSelectThreadTab();
+      browseViewState.setRightPanelMode("turns");
+    });
   }
 
   const handleProjectTagInputKeyDown = createEnterKeyDownHandler(
@@ -102,11 +118,14 @@ export default function App() {
     browseViewState,
     detailTextPreviewLength: DETAIL_TEXT_PREVIEW_LENGTH,
     handleImportSessions,
+    handleOpenGlobalSearchResult,
+    handleThreadSelectInWorkspace,
     handleOpenIntegritySampleInTurns,
     handleProjectTagInputKeyDown,
     handleThreadTagInputKeyDown,
     handleTurnTagInputKeyDown,
     libraryState,
+    globalSearchState,
     maintenanceState,
     metadataManagement,
     selectionState,

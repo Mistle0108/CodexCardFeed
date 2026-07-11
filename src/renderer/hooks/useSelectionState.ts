@@ -109,6 +109,21 @@ export function useSelectionState({
     });
   }
 
+  function handleOpenSearchResult(
+    result: TurnSearchResult,
+    onBeforeLoad?: () => void
+  ) {
+    revealThreadSelection(result.threadId);
+    setSelectedThreadId(result.threadId);
+    onBeforeLoad?.();
+    setIsTurnModalOpen(false);
+
+    void withLibraryLoad(async () => {
+      const nextTurnId = await loadTurnsForThread(result.threadId, result.turnId);
+      setSelectedTurnId(nextTurnId);
+    });
+  }
+
   function handleDetailItemToggle(itemId: string) {
     setExpandedDetailItemIds((current) => ({
       ...current,
@@ -171,6 +186,7 @@ export function useSelectionState({
     handleOpenDiagnosticsModal,
     handleOpenIntegritySample,
     handleOpenProjectModal,
+    handleOpenSearchResult,
     handleOpenTurnDetail,
     handleThreadSelect,
     handleToggleAdditionalItemsVisible,
