@@ -1,5 +1,7 @@
 const {
   IMPORTER_LAYOUT_VERSION,
+  IMPORTER_REPARSE_VERSION,
+  IMPORTER_REPARSE_VERSION_KEY,
   SESSION_INDEX_SIGNATURE_KEY,
   GLOBAL_STATE_SIGNATURE_KEY,
   SOURCE_FILE_STATUS_ACTIVE,
@@ -63,6 +65,8 @@ function importCodexSessions(database, options = {}) {
     database,
     GLOBAL_STATE_SIGNATURE_KEY
   );
+  const previousReparseVersion =
+    Number.parseInt(getImporterMetaValue(database, IMPORTER_REPARSE_VERSION_KEY) ?? "", 10) || 0;
   const validationState = createValidationState();
 
   const result = {
@@ -101,10 +105,13 @@ function importCodexSessions(database, options = {}) {
       files.map((filePath) => [filePath, createSourceFileSnapshot(filePath)])
     );
     const trackedSourceFiles = listTrackedSourceFiles(database);
+    const forceReparseForParserUpgrade =
+      trackedSourceFiles.size > 0 && previousReparseVersion < IMPORTER_REPARSE_VERSION;
     const forceReparseAllFiles =
       trackedSourceFiles.size > 0 &&
       (sessionIndexSignature !== previousSessionIndexSignature ||
-        globalStateSignature !== previousGlobalStateSignature);
+        globalStateSignature !== previousGlobalStateSignature ||
+        forceReparseForParserUpgrade);
     const bootstrapMissingSourceFiles =
       trackedSourceFiles.size === 0
         ? listExistingThreadSourceFiles(database).filter(
@@ -324,6 +331,7 @@ function importCodexSessions(database, options = {}) {
     pruneEmptyProjects(database);
     database.exec("COMMIT");
     setImporterLayoutVersion(database, IMPORTER_LAYOUT_VERSION);
+    setImporterMetaValue(database, IMPORTER_REPARSE_VERSION_KEY, String(IMPORTER_REPARSE_VERSION));
     setImporterMetaValue(database, SESSION_INDEX_SIGNATURE_KEY, sessionIndexSignature);
     setImporterMetaValue(database, GLOBAL_STATE_SIGNATURE_KEY, globalStateSignature);
     result.warnings = validationState.warnings;

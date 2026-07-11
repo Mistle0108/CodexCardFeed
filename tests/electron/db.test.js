@@ -19,6 +19,9 @@ test("project, thread, and turn overrides persist and clear through exported DB 
     const initialThread = listThreads(context.database)[0];
     const initialTurn = listTurnsByThread(context.database, context.sessionId)[0];
 
+    assert.equal(initialTurn.modelName, "gpt-5.4");
+    assert.equal(initialTurn.reasoningEffort, "high");
+
     saveProjectOverride(context.database, initialProject.id, {
       displayName: "Renamed Workspace",
       isPinned: true,
@@ -60,6 +63,8 @@ test("project, thread, and turn overrides persist and clear through exported DB 
     assert.equal(overriddenTurn.isPinned, true);
     assert.deepEqual(overriddenTurn.tags, ["turn-tag"]);
     assert.equal(overriddenTurn.notes, "Turn note");
+    assert.equal(overriddenTurn.modelName, "gpt-5.4");
+    assert.equal(overriddenTurn.reasoningEffort, "high");
 
     saveProjectOverride(context.database, initialProject.id, {
       displayName: null,
@@ -100,6 +105,8 @@ test("project, thread, and turn overrides persist and clear through exported DB 
     assert.equal(clearedTurn.isPinned, false);
     assert.deepEqual(clearedTurn.tags, []);
     assert.equal(clearedTurn.notes, "");
+    assert.equal(clearedTurn.modelName, "gpt-5.4");
+    assert.equal(clearedTurn.reasoningEffort, "high");
   } finally {
     cleanupTestContext(context);
   }

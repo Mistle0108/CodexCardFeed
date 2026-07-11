@@ -164,6 +164,8 @@ type TurnListItem = {
   searchUserText: string;
   searchFinalAnswerText: string;
   status: string;
+  modelName: string | null;
+  reasoningEffort: string | null;
   startedAt: string | null;
   completedAt: string | null;
   lastSeenAt: string | null;

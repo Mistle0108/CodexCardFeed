@@ -30,6 +30,23 @@ type WorkspaceTurnListProps = {
   onOpenTurnDetail: (turnId: string) => void;
 };
 
+function renderTurnExecutionMeta(turn: TurnListItem) {
+  if (!turn.modelName && !turn.reasoningEffort) {
+    return null;
+  }
+
+  return (
+    <div className="turn-execution-meta">
+      {turn.modelName ? (
+        <span className="meta-pill execution-pill">{turn.modelName}</span>
+      ) : null}
+      {turn.reasoningEffort ? (
+        <span className="meta-pill effort-pill">Effort {turn.reasoningEffort}</span>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkspaceTurnList({
   selectedThread,
   visibleTurns,
@@ -97,6 +114,7 @@ export function WorkspaceTurnList({
                         </span>
                       </div>
                     </div>
+                    {renderTurnExecutionMeta(turn)}
                     <p className="turn-preview">
                       <span className="preview-label">Q</span>
                       <span>{renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}</span>
@@ -191,6 +209,7 @@ export function WorkspaceTurnList({
                       {formatDateTime(turn.completedAt ?? turn.startedAt ?? turn.lastSeenAt)}
                     </span>
                   </div>
+                  {renderTurnExecutionMeta(turn)}
                   <p className="question-card-question">
                     {renderHighlightedText(questionPreview, normalizedThreadSearchTerms)}
                   </p>

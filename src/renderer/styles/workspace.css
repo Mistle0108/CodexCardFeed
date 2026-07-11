@@ -459,6 +459,13 @@
   gap: 4px;
 }
 
+.turn-execution-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
 .selection-copy strong {
   color: #223045;
   font-size: 0.88rem;
@@ -468,6 +475,18 @@
 .selection-copy span {
   color: #6d675f;
   font-size: 0.78rem;
+}
+
+.selection-copy .meta-pill {
+  font-size: 0.68rem;
+}
+
+.selection-copy .execution-pill {
+  color: #334155;
+}
+
+.selection-copy .effort-pill {
+  color: #2d6cbe;
 }
 
 .selection-trailing {

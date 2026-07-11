@@ -52,6 +52,7 @@
 .count-pill,
 .status-pill,
 .pin-pill,
+.meta-pill,
 .role-badge,
 .kind-badge,
 .item-type-badge {
@@ -97,6 +98,18 @@
   font-size: 0.7rem;
 }
 
+.meta-pill {
+  padding: 3px 8px;
+  background: rgba(44, 58, 78, 0.08);
+  color: #334155;
+  font-size: 0.68rem;
+}
+
+.effort-pill {
+  background: rgba(45, 108, 190, 0.1);
+  color: #2d6cbe;
+}
+
 .token-meta {
   color: #2e6fb1;
   font-weight: 700;
@@ -136,4 +149,3 @@
   color: #72695f;
   font-size: 0.82rem;
 }
-

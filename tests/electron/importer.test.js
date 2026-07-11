@@ -1,8 +1,15 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const test = require("node:test");
+const { importCodexSessions } = require("../../electron/importer");
 const { runIntegrityCheck } = require("../../electron/integrity");
-const { listItemsByTurn, listProjects, listThreads, listTurnsByThread } = require("../../electron/db");
+const {
+  listItemsByTurn,
+  listProjects,
+  listThreads,
+  listTurnsByThread,
+  saveTurnOverride
+} = require("../../electron/db");
 const { runSessionDiagnosis } = require("../../electron/importer");
 const { cleanupTestContext, createImportedTestContext } = require("./test-helpers");
 
@@ -43,6 +50,8 @@ test("importCodexSessions imports a minimal Codex fixture into projects, threads
     assert.equal(turns[0].firstAssistantSnippet, "Build it with cards and filters.");
     assert.equal(turns[0].searchUserText, "How do I build a card UI?");
     assert.equal(turns[0].searchFinalAnswerText, "Build it with cards and filters.");
+    assert.equal(turns[0].modelName, "gpt-5.4");
+    assert.equal(turns[0].reasoningEffort, "high");
     assert.equal(turns[0].inputTokens, 10);
     assert.equal(turns[0].cachedInputTokens, 3);
     assert.equal(turns[0].outputTokens, 5);
@@ -86,6 +95,32 @@ test("importCodexSessions imports a minimal Codex fixture into projects, threads
         }
       ]
     );
+  } finally {
+    cleanupTestContext(context);
+  }
+});
+
+test("importCodexSessions forces a full reparse for parser upgrades without clearing local overrides", () => {
+  const context = createImportedTestContext();
+
+  try {
+    saveTurnOverride(context.database, context.turnId, {
+      displayTitle: "Pinned local turn"
+    });
+    context.database
+      .prepare("DELETE FROM app_meta WHERE key = ?")
+      .run("codex_card_feed_importer_reparse_version");
+
+    const result = importCodexSessions(context.database, {
+      codexHome: context.codexHome
+    });
+    const turn = listTurnsByThread(context.database, context.sessionId)[0];
+
+    assert.equal(result.rebuiltLibrary, false);
+    assert.equal(result.forcedFileReparse, true);
+    assert.equal(turn.displayTitle, "Pinned local turn");
+    assert.equal(turn.modelName, "gpt-5.4");
+    assert.equal(turn.reasoningEffort, "high");
   } finally {
     cleanupTestContext(context);
   }
