@@ -188,6 +188,46 @@ type TurnItem = {
   createdAt: string | null;
 };
 
+type TurnSearchMatch = {
+  field: "question" | "answer" | "title" | "tags" | "memo";
+  label: string;
+  snippet: string;
+};
+
+type TurnSearchResult = {
+  turnId: string;
+  threadId: string;
+  projectId: string | null;
+  projectName: string | null;
+  threadTitle: string;
+  turnOrdinal: number;
+  turnTitle: string | null;
+  tags: string[];
+  startedAt: string | null;
+  completedAt: string | null;
+  matches: TurnSearchMatch[];
+};
+
+type TurnSearchResponse = {
+  query: string;
+  results: TurnSearchResult[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
+
+type GlobalSearchTab = {
+  id: string;
+  query: string;
+  results: TurnSearchResult[];
+  total: number;
+  hasMore: boolean;
+  isLoading: boolean;
+  error: string | null;
+  scrollTop: number;
+};
+
 type IntegritySampleRef = {
   label: string;
   isNew: boolean;
@@ -282,5 +322,9 @@ interface Window {
     listThreads(projectId?: string | null): Promise<ThreadListItem[]>;
     listTurns(threadId: string): Promise<TurnListItem[]>;
     listTurnItems(turnId: string): Promise<TurnItem[]>;
+    searchTurns(
+      query: string,
+      options?: { limit?: number; offset?: number }
+    ): Promise<TurnSearchResponse>;
   };
 }

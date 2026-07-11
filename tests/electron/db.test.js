@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   listProjects,
+  searchTurns,
   listThreads,
   listTurnsByThread,
   saveProjectOverride,
@@ -166,6 +167,60 @@ test("listTurnsByThread preserves aggregated search text and first assistant sel
     );
     assert.equal(turn.searchUserText, "How do I build a card UI?");
     assert.equal(turn.itemCount, 7);
+  } finally {
+    cleanupTestContext(context);
+  }
+});
+
+test("searchTurns indexes only turn questions, final answers, and local turn metadata", () => {
+  const context = createImportedTestContext();
+
+  try {
+    assert.equal(searchTurns(context.database, "card UI").total, 1);
+    assert.equal(searchTurns(context.database, "filters").total, 1);
+    assert.equal(searchTurns(context.database, "UI").total, 1);
+    assert.equal(searchTurns(context.database, "AGENTS.md").total, 0);
+    assert.equal(searchTurns(context.database, "Inspecting the codebase").total, 0);
+
+    saveTurnOverride(context.database, context.turnId, {
+      displayTitle: "검색 인덱스 설계",
+      tags: ["검색", "로컬 데이터"],
+      notes: "질문과 답변을 다시 찾기 위한 메모"
+    });
+
+    const titleResult = searchTurns(context.database, "인덱스");
+    const tagResult = searchTurns(context.database, "로컬");
+    const memoResult = searchTurns(context.database, "다시 찾기");
+    const multiFieldResult = searchTurns(context.database, "검색");
+
+    assert.equal(titleResult.total, 1);
+    assert.equal(titleResult.results[0].turnId, context.turnId);
+    assert.ok(titleResult.results[0].matches.some((match) => match.field === "title"));
+    assert.equal(tagResult.total, 1);
+    assert.ok(tagResult.results[0].matches.some((match) => match.field === "tags"));
+    assert.equal(memoResult.total, 1);
+    assert.ok(memoResult.results[0].matches.some((match) => match.field === "memo"));
+    assert.equal(multiFieldResult.total, 1);
+    assert.ok(multiFieldResult.results[0].matches.some((match) => match.field === "title"));
+    assert.ok(multiFieldResult.results[0].matches.some((match) => match.field === "tags"));
+
+    saveTurnOverride(context.database, context.turnId, {
+      displayTitle: null,
+      tags: [],
+      notes: ""
+    });
+
+    assert.equal(searchTurns(context.database, "인덱스").total, 0);
+    assert.equal(searchTurns(context.database, "로컬").total, 0);
+    assert.equal(searchTurns(context.database, "다시 찾기").total, 0);
+
+    context.database.prepare("DELETE FROM turns WHERE id = ?").run(context.turnId);
+
+    assert.equal(searchTurns(context.database, "card UI").total, 0);
+    assert.equal(
+      context.database.prepare("SELECT COUNT(*) AS count FROM turn_search_documents").get().count,
+      0
+    );
   } finally {
     cleanupTestContext(context);
   }

@@ -34,7 +34,7 @@ test("background import task imports sessions through a worker and returns overv
     assert.equal(result.importedThreads, 1);
     assert.equal(result.importedTurns, 1);
     assert.equal(result.importedItems, 5);
-    assert.equal(result.overview.schemaVersion, "6");
+    assert.equal(result.overview.schemaVersion, "7");
     assert.ok(result.overview.tables.some((table) => table.name === "threads" && table.rowCount === 1));
     assert.ok(result.overview.tables.some((table) => table.name === "turns" && table.rowCount === 1));
 

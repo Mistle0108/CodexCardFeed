@@ -18,7 +18,8 @@ function registerIpcHandlers({
   listProjects,
   listThreads,
   listTurns,
-  listTurnItems
+  listTurnItems,
+  searchTurns
 }) {
   ipcMain.handle("app:get-shell-info", () => {
     return getShellInfo();
@@ -90,6 +91,10 @@ function registerIpcHandlers({
 
   ipcMain.handle("library:list-turn-items", (_event, turnId) => {
     return listTurnItems(turnId);
+  });
+
+  ipcMain.handle("library:search-turns", (_event, query, options) => {
+    return searchTurns(query, options);
   });
 }
 

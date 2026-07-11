@@ -1,6 +1,8 @@
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { WorkspaceThreadPanel } from "./workspace/WorkspaceThreadPanel";
 import { WorkspaceTurnList } from "./workspace/WorkspaceTurnList";
+import { GlobalSearchResults } from "./workspace/GlobalSearchResults";
+import { WorkspaceTabBar } from "./workspace/WorkspaceTabBar";
 
 type WorkspacePanelProps = {
   selectedThread: ThreadListItem | null;
@@ -8,6 +10,10 @@ type WorkspacePanelProps = {
   visibleTurns: TurnListItem[];
   questionTurns: TurnListItem[];
   selectedTurnId: string | null;
+  activeSearchTab: GlobalSearchTab | null;
+  activeWorkspaceTabId: string;
+  searchInput: string;
+  searchTabs: GlobalSearchTab[];
   rightPanelMode: "turns" | "questions";
   threadTitleDraft: string;
   isThreadTitleEditing: boolean;
@@ -69,6 +75,14 @@ type WorkspacePanelProps = {
   onThreadSearchQueryChange: (value: string) => void;
   onClearThreadSearch: () => void;
   onOpenTurnDetail: (turnId: string) => void;
+  onCloseSearchTab: (tabId: string) => void;
+  onGlobalSearchInputChange: (value: string) => void;
+  onLoadMoreSearchResults: (tabId: string) => void;
+  onOpenGlobalSearchResult: (result: TurnSearchResult) => void;
+  onSearchResultScroll: (tabId: string, scrollTop: number) => void;
+  onSelectSearchTab: (tabId: string) => void;
+  onSelectThreadTab: () => void;
+  onSubmitGlobalSearch: () => void;
 };
 
 export function WorkspacePanel({
@@ -77,6 +91,10 @@ export function WorkspacePanel({
   visibleTurns,
   questionTurns,
   selectedTurnId,
+  activeSearchTab,
+  activeWorkspaceTabId,
+  searchInput,
+  searchTabs,
   rightPanelMode,
   threadTitleDraft,
   isThreadTitleEditing,
@@ -123,72 +141,117 @@ export function WorkspacePanel({
   onRightPanelModeChange,
   onThreadSearchQueryChange,
   onClearThreadSearch,
-  onOpenTurnDetail
+  onOpenTurnDetail,
+  onCloseSearchTab,
+  onGlobalSearchInputChange,
+  onLoadMoreSearchResults,
+  onOpenGlobalSearchResult,
+  onSearchResultScroll,
+  onSelectSearchTab,
+  onSelectThreadTab,
+  onSubmitGlobalSearch
 }: WorkspacePanelProps) {
   return (
     <>
-      <WorkspaceThreadPanel
-        canAddThreadTag={canAddThreadTag}
-        canClearThreadMemo={canClearThreadMemo}
-        canResetThreadTitle={canResetThreadTitle}
-        canSaveThreadMemo={canSaveThreadMemo}
-        canSaveThreadTitle={canSaveThreadTitle}
-        formatFilteredCountLabel={formatFilteredCountLabel}
-        isSavingThreadOverride={isSavingThreadOverride}
-        isThreadMetadataCollapsed={isThreadMetadataCollapsed}
-        isThreadSearchActive={isThreadSearchActive}
-        isThreadTitleEditing={isThreadTitleEditing}
-        onAddThreadTag={onAddThreadTag}
-        onCancelThreadTitleEdit={onCancelThreadTitleEdit}
-        onClearThreadMemo={onClearThreadMemo}
-        onClearThreadSearch={onClearThreadSearch}
-        onOpenCodexThread={onOpenCodexThread}
-        onResetThreadMemoDraft={onResetThreadMemoDraft}
-        onResetThreadTitle={onResetThreadTitle}
-        onRightPanelModeChange={onRightPanelModeChange}
-        onRemoveThreadTag={onRemoveThreadTag}
-        onSaveThreadMemo={onSaveThreadMemo}
-        onSaveThreadTitle={onSaveThreadTitle}
-        onStartThreadTitleEdit={onStartThreadTitleEdit}
-        onThreadNotesDraftChange={onThreadNotesDraftChange}
-        onThreadSearchQueryChange={onThreadSearchQueryChange}
-        onThreadTagInputChange={onThreadTagInputChange}
-        onThreadTagInputKeyDown={onThreadTagInputKeyDown}
-        onThreadTitleDraftChange={onThreadTitleDraftChange}
-        onToggleThreadMetadataCollapsed={onToggleThreadMetadataCollapsed}
-        onToggleThreadPin={onToggleThreadPin}
-        questionTurns={questionTurns}
-        rightPanelMode={rightPanelMode}
-        selectedThread={selectedThread}
-        threadNotesDraft={threadNotesDraft}
-        threadSearchQuery={threadSearchQuery}
-        threadTagInputDraft={threadTagInputDraft}
-        threadTagsDraft={threadTagsDraft}
-        threadTitleDraft={threadTitleDraft}
-        turns={turns}
-        visibleTurns={visibleTurns}
-      />
+      <div className="workspace-header">
+        <WorkspaceTabBar
+          activeWorkspaceTabId={activeWorkspaceTabId}
+          onCloseSearchTab={onCloseSearchTab}
+          onSearchInputChange={onGlobalSearchInputChange}
+          onSelectSearchTab={onSelectSearchTab}
+          onSelectThreadTab={onSelectThreadTab}
+          onSubmitSearch={onSubmitGlobalSearch}
+          searchInput={searchInput}
+          searchTabs={searchTabs}
+          selectedThreadTitle={selectedThread?.title ?? null}
+        />
 
-      <WorkspaceTurnList
-        formatCountLabel={formatCountLabel}
-        formatDateTime={formatDateTime}
-        formatTokenLabel={formatTokenLabel}
-        getAdditionalSearchExcerpt={getAdditionalSearchExcerpt}
-        getAnswerPreview={getAnswerPreview}
-        getMatchingMemoExcerpt={getMatchingMemoExcerpt}
-        getMatchingTagValues={getMatchingTagValues}
-        getQuestionPreview={getQuestionPreview}
-        getTurnHeading={getTurnHeading}
-        isThreadSearchActive={isThreadSearchActive}
-        normalizedThreadSearchTerms={normalizedThreadSearchTerms}
-        onOpenTurnDetail={onOpenTurnDetail}
-        questionTurns={questionTurns}
-        renderHighlightedText={renderHighlightedText}
-        rightPanelMode={rightPanelMode}
-        selectedThread={selectedThread}
-        selectedTurnId={selectedTurnId}
-        visibleTurns={visibleTurns}
-      />
+        {activeWorkspaceTabId === "thread" ? (
+          <WorkspaceThreadPanel
+            canAddThreadTag={canAddThreadTag}
+            canClearThreadMemo={canClearThreadMemo}
+            canResetThreadTitle={canResetThreadTitle}
+            canSaveThreadMemo={canSaveThreadMemo}
+            canSaveThreadTitle={canSaveThreadTitle}
+            formatFilteredCountLabel={formatFilteredCountLabel}
+            isSavingThreadOverride={isSavingThreadOverride}
+            isThreadMetadataCollapsed={isThreadMetadataCollapsed}
+            isThreadSearchActive={isThreadSearchActive}
+            isThreadTitleEditing={isThreadTitleEditing}
+            onAddThreadTag={onAddThreadTag}
+            onCancelThreadTitleEdit={onCancelThreadTitleEdit}
+            onClearThreadMemo={onClearThreadMemo}
+            onClearThreadSearch={onClearThreadSearch}
+            onOpenCodexThread={onOpenCodexThread}
+            onResetThreadMemoDraft={onResetThreadMemoDraft}
+            onResetThreadTitle={onResetThreadTitle}
+            onRightPanelModeChange={onRightPanelModeChange}
+            onRemoveThreadTag={onRemoveThreadTag}
+            onSaveThreadMemo={onSaveThreadMemo}
+            onSaveThreadTitle={onSaveThreadTitle}
+            onStartThreadTitleEdit={onStartThreadTitleEdit}
+            onThreadNotesDraftChange={onThreadNotesDraftChange}
+            onThreadSearchQueryChange={onThreadSearchQueryChange}
+            onThreadTagInputChange={onThreadTagInputChange}
+            onThreadTagInputKeyDown={onThreadTagInputKeyDown}
+            onThreadTitleDraftChange={onThreadTitleDraftChange}
+            onToggleThreadMetadataCollapsed={onToggleThreadMetadataCollapsed}
+            onToggleThreadPin={onToggleThreadPin}
+            questionTurns={questionTurns}
+            rightPanelMode={rightPanelMode}
+            selectedThread={selectedThread}
+            threadNotesDraft={threadNotesDraft}
+            threadSearchQuery={threadSearchQuery}
+            threadTagInputDraft={threadTagInputDraft}
+            threadTagsDraft={threadTagsDraft}
+            threadTitleDraft={threadTitleDraft}
+            turns={turns}
+            visibleTurns={visibleTurns}
+          />
+        ) : activeSearchTab ? (
+          <div className="global-search-heading">
+            <div>
+              <p className="workspace-kicker">Search results</p>
+              <h2>{activeSearchTab.query}</h2>
+            </div>
+            <p className="muted">
+              {activeSearchTab.results.length} of {activeSearchTab.total} turns
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {activeWorkspaceTabId === "thread" ? (
+        <WorkspaceTurnList
+          formatCountLabel={formatCountLabel}
+          formatDateTime={formatDateTime}
+          formatTokenLabel={formatTokenLabel}
+          getAdditionalSearchExcerpt={getAdditionalSearchExcerpt}
+          getAnswerPreview={getAnswerPreview}
+          getMatchingMemoExcerpt={getMatchingMemoExcerpt}
+          getMatchingTagValues={getMatchingTagValues}
+          getQuestionPreview={getQuestionPreview}
+          getTurnHeading={getTurnHeading}
+          isThreadSearchActive={isThreadSearchActive}
+          normalizedThreadSearchTerms={normalizedThreadSearchTerms}
+          onOpenTurnDetail={onOpenTurnDetail}
+          questionTurns={questionTurns}
+          renderHighlightedText={renderHighlightedText}
+          rightPanelMode={rightPanelMode}
+          selectedThread={selectedThread}
+          selectedTurnId={selectedTurnId}
+          visibleTurns={visibleTurns}
+        />
+      ) : activeSearchTab ? (
+        <GlobalSearchResults
+          formatDateTime={formatDateTime}
+          onLoadMore={onLoadMoreSearchResults}
+          onOpenResult={onOpenGlobalSearchResult}
+          onScroll={onSearchResultScroll}
+          renderHighlightedText={renderHighlightedText}
+          searchTab={activeSearchTab}
+        />
+      ) : null}
     </>
   );
 }
