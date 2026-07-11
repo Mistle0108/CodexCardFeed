@@ -190,12 +190,48 @@ function createTurnState(turnId, ordinal) {
     startedAt: null,
     completedAt: null,
     status: "in_progress",
+    modelName: null,
+    reasoningEffort: null,
     firstUserSnippet: "",
     fallbackUserSnippet: "",
     itemCounter: 0,
     items: [],
     tokenEvents: []
   };
+}
+
+function readTurnContextModelName(payload) {
+  if (isNonEmptyString(payload.model)) {
+    return payload.model;
+  }
+
+  const collaborationSettings = payload.collaboration_mode?.settings;
+
+  if (
+    isRecord(collaborationSettings) &&
+    isNonEmptyString(collaborationSettings.model)
+  ) {
+    return collaborationSettings.model;
+  }
+
+  return null;
+}
+
+function readTurnContextReasoningEffort(payload) {
+  if (isNonEmptyString(payload.effort)) {
+    return payload.effort;
+  }
+
+  const collaborationSettings = payload.collaboration_mode?.settings;
+
+  if (
+    isRecord(collaborationSettings) &&
+    isNonEmptyString(collaborationSettings.reasoning_effort)
+  ) {
+    return collaborationSettings.reasoning_effort;
+  }
+
+  return null;
 }
 
 function resolveResponseItemTurnId(payload, activeTurnId) {
@@ -413,6 +449,9 @@ function parseSessionFile(
 
       const turn = ensureTurn(parsed.payload.turn_id);
       turn.startedAt = pickEarlierIso(turn.startedAt, parsed.timestamp);
+      turn.modelName = readTurnContextModelName(parsed.payload) ?? turn.modelName;
+      turn.reasoningEffort =
+        readTurnContextReasoningEffort(parsed.payload) ?? turn.reasoningEffort;
       if (!threadWorkspaceRoots.length) {
         threadWorkspaceRoots = normalizePathList(parsed.payload.workspace_roots);
       }
@@ -700,6 +739,8 @@ function parseSessionFile(
       startedAt: turn.startedAt,
       completedAt: turn.completedAt,
       status: turn.status,
+      modelName: turn.modelName,
+      reasoningEffort: turn.reasoningEffort,
       firstUserSnippet,
       contentHash: buildTurnContentHash(turn.items),
       lastSeenAt,

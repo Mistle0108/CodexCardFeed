@@ -84,6 +84,8 @@ function upsertTurn(database, turn) {
         started_at,
         completed_at,
         status,
+        model_name,
+        reasoning_effort,
         first_user_snippet,
         content_hash,
         last_seen_at,
@@ -94,13 +96,15 @@ function upsertTurn(database, turn) {
         total_tokens,
         token_event_count
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         thread_id = excluded.thread_id,
         ordinal = excluded.ordinal,
         started_at = COALESCE(turns.started_at, excluded.started_at),
         completed_at = excluded.completed_at,
         status = excluded.status,
+        model_name = excluded.model_name,
+        reasoning_effort = excluded.reasoning_effort,
         first_user_snippet = excluded.first_user_snippet,
         content_hash = excluded.content_hash,
         last_seen_at = excluded.last_seen_at,
@@ -118,6 +122,8 @@ function upsertTurn(database, turn) {
       turn.startedAt,
       turn.completedAt,
       turn.status,
+      turn.modelName,
+      turn.reasoningEffort,
       turn.firstUserSnippet,
       turn.contentHash,
       turn.lastSeenAt,

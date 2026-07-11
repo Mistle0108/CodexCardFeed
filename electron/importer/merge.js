@@ -20,6 +20,8 @@ function mergeTurnSnapshots(turns, threadId) {
         startedAt: turn.startedAt,
         completedAt: turn.completedAt,
         status: turn.status,
+        modelName: turn.modelName ?? null,
+        reasoningEffort: turn.reasoningEffort ?? null,
         firstUserSnippet: turn.firstUserSnippet,
         lastSeenAt: turn.lastSeenAt,
         items: new Map(turn.items.map((item) => [item.id, { ...item }])),
@@ -35,6 +37,11 @@ function mergeTurnSnapshots(turns, threadId) {
       mergedTurn.completedAt || turn.status === "completed"
         ? "completed"
         : mergedTurn.status;
+    mergedTurn.modelName = pickPreferredText(mergedTurn.modelName, turn.modelName);
+    mergedTurn.reasoningEffort = pickPreferredText(
+      mergedTurn.reasoningEffort,
+      turn.reasoningEffort
+    );
     mergedTurn.firstUserSnippet = pickPreferredText(
       mergedTurn.firstUserSnippet,
       turn.firstUserSnippet
@@ -118,6 +125,8 @@ function mergeTurnSnapshots(turns, threadId) {
         startedAt: turn.startedAt,
         completedAt: turn.completedAt,
         status: turn.completedAt || turn.status === "completed" ? "completed" : "in_progress",
+        modelName: turn.modelName ?? null,
+        reasoningEffort: turn.reasoningEffort ?? null,
         firstUserSnippet,
         contentHash: buildTurnContentHash(items),
         lastSeenAt: turn.lastSeenAt,

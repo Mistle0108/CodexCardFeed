@@ -1,5 +1,7 @@
 const IMPORTER_LAYOUT_VERSION = 3;
 const IMPORTER_LAYOUT_VERSION_KEY = "codex_card_feed_importer_layout_version";
+const IMPORTER_REPARSE_VERSION = 1;
+const IMPORTER_REPARSE_VERSION_KEY = "codex_card_feed_importer_reparse_version";
 const SESSION_INDEX_SIGNATURE_KEY = "codex_card_feed_session_index_signature";
 const GLOBAL_STATE_SIGNATURE_KEY = "codex_card_feed_global_state_signature";
 const SESSION_DIAGNOSIS_SNAPSHOT_KEY = "diagnostic_snapshot.session_diagnosis";
@@ -50,6 +52,8 @@ const KNOWN_RESPONSE_ITEM_TYPES = new Set([
 module.exports = {
   IMPORTER_LAYOUT_VERSION,
   IMPORTER_LAYOUT_VERSION_KEY,
+  IMPORTER_REPARSE_VERSION,
+  IMPORTER_REPARSE_VERSION_KEY,
   SESSION_INDEX_SIGNATURE_KEY,
   GLOBAL_STATE_SIGNATURE_KEY,
   SESSION_DIAGNOSIS_SNAPSHOT_KEY,

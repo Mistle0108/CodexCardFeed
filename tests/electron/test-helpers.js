@@ -58,7 +58,15 @@ function createTestContext() {
       timestamp: "2026-07-10T00:00:01.000Z",
       payload: {
         turn_id: turnId,
-        workspace_roots: [workspaceRoot]
+        workspace_roots: [workspaceRoot],
+        model: "gpt-5.4",
+        effort: "high",
+        collaboration_mode: {
+          settings: {
+            model: "gpt-5.4",
+            reasoning_effort: "high"
+          }
+        }
       }
     },
     {

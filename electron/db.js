@@ -7,7 +7,7 @@ const {
   searchTurns
 } = require("./search-index");
 
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 
 function createMetaTable(database) {
   database.exec(`
@@ -273,6 +273,13 @@ function migrationSeven(database) {
   setMetaValue(database, "schema_version", "7");
 }
 
+function migrationEight(database) {
+  addColumnIfMissing(database, "turns", "model_name", "TEXT");
+  addColumnIfMissing(database, "turns", "reasoning_effort", "TEXT");
+
+  setMetaValue(database, "schema_version", "8");
+}
+
 const migrations = [
   { version: 1, apply: migrationOne },
   { version: 2, apply: migrationTwo },
@@ -280,7 +287,8 @@ const migrations = [
   { version: 4, apply: migrationFour },
   { version: 5, apply: migrationFive },
   { version: 6, apply: migrationSix },
-  { version: 7, apply: migrationSeven }
+  { version: 7, apply: migrationSeven },
+  { version: 8, apply: migrationEight }
 ];
 
 function runMigrations(database) {
@@ -506,6 +514,8 @@ function listTurnsByThread(database, threadId) {
           turn_overrides.notes,
           turns.first_user_snippet,
           turns.status,
+          turns.model_name,
+          turns.reasoning_effort,
           turns.started_at,
           turns.completed_at,
           turns.last_seen_at,
@@ -611,6 +621,8 @@ function listTurnsByThread(database, threadId) {
         first_assistant_messages.first_assistant_snippet,
         final_answer_search.search_final_answer_text,
         thread_turns.status,
+        thread_turns.model_name,
+        thread_turns.reasoning_effort,
         thread_turns.started_at,
         thread_turns.completed_at,
         thread_turns.last_seen_at,
@@ -648,6 +660,8 @@ function listTurnsByThread(database, threadId) {
       searchUserText: row.search_user_text ?? row.first_user_snippet ?? "",
       searchFinalAnswerText: row.search_final_answer_text ?? row.first_assistant_snippet ?? "",
       status: row.status,
+      modelName: row.model_name ?? null,
+      reasoningEffort: row.reasoning_effort ?? null,
       startedAt: row.started_at ?? null,
       completedAt: row.completed_at ?? null,
       lastSeenAt: row.last_seen_at ?? null,
